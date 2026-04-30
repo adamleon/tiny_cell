@@ -1,0 +1,14 @@
+# Build
+build/
+
+# CMake user-specific files
+CMakeUserPresets.json
+
+# Editor
+.vscode/*.db
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db

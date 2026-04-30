@@ -1,0 +1,39 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "fence_walls",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/fence_walls",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "cmake build",
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ]
+        },
+        {
+            "name": "GenLookup",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/GenLookup",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "cmake build",
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ]
+        }
+    ]
+}

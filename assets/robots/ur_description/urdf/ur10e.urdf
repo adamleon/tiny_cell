@@ -1,0 +1,184 @@
+<?xml version="1.0"?>
+<!-- Hand-crafted UR10e URDF for CellGen.
+     Kinematics: UR10e datasheet (d1=0.1273, a2=-0.6120, a3=-0.5723,
+                  d4=0.1639, d5=0.1157, d6=0.0922).
+     Meshes: ur_description DAE visuals + STL collision. -->
+<robot name="ur10e">
+
+  <link name="world"/>
+
+  <link name="base_link">
+    <visual>
+      <origin rpy="0 0 3.141592653589793" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="../meshes/ur10e/visual/base.dae"/>
+      </geometry>
+      <material name="ur_grey">
+        <color rgba="0.5 0.5 0.5 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin rpy="0 0 3.141592653589793" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="../meshes/ur10e/collision/base.stl"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="base_joint" type="fixed">
+    <parent link="world"/>
+    <child link="base_link"/>
+    <origin rpy="0 0 0" xyz="0 0 0"/>
+  </joint>
+
+  <!-- ── Link: upper_arm (carries shoulder mesh, rotates with joint 1) ── -->
+  <link name="upper_arm_link">
+    <visual>
+      <origin rpy="1.5707963267948966 0 -1.5707963267948966" xyz="0 0 0.176"/>
+      <geometry>
+        <mesh filename="../meshes/ur10e/visual/shoulder.dae"/>
+      </geometry>
+      <material name="ur_grey"><color rgba="0.5 0.5 0.5 1"/></material>
+    </visual>
+    <collision>
+      <origin rpy="1.5707963267948966 0 -1.5707963267948966" xyz="0 0 0.176"/>
+      <geometry>
+        <mesh filename="../meshes/ur10e/collision/shoulder.stl"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="shoulder_pan_joint" type="revolute">
+    <origin rpy="0 0 0" xyz="0 0 0.1273"/>
+    <parent link="base_link"/>
+    <child link="upper_arm_link"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="330" lower="-6.283185307179586" upper="6.283185307179586" velocity="2.0943951023931953"/>
+  </joint>
+
+  <!-- ── Link: forearm (carries upper-arm mesh) ── -->
+  <link name="forearm_link">
+    <visual>
+      <origin rpy="1.5707963267948966 0 -1.5707963267948966" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="../meshes/ur10e/visual/upperarm.dae"/>
+      </geometry>
+      <material name="ur_grey"><color rgba="0.5 0.5 0.5 1"/></material>
+    </visual>
+    <collision>
+      <origin rpy="1.5707963267948966 0 -1.5707963267948966" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="../meshes/ur10e/collision/upperarm.stl"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="shoulder_lift_joint" type="revolute">
+    <origin rpy="0 1.5707963267948966 0" xyz="0 0.1761 0"/>
+    <parent link="upper_arm_link"/>
+    <child link="forearm_link"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="330" lower="-6.283185307179586" upper="6.283185307179586" velocity="2.0943951023931953"/>
+  </joint>
+
+  <!-- ── Link: wrist_1 (carries forearm mesh) ── -->
+  <link name="wrist_1_link">
+    <visual>
+      <origin rpy="1.5707963267948966 0 -1.5707963267948966" xyz="0 0 -0.137"/>
+      <geometry>
+        <mesh filename="../meshes/ur10e/visual/forearm.dae"/>
+      </geometry>
+      <material name="ur_grey"><color rgba="0.5 0.5 0.5 1"/></material>
+    </visual>
+    <collision>
+      <origin rpy="1.5707963267948966 0 -1.5707963267948966" xyz="0 0 -0.137"/>
+      <geometry>
+        <mesh filename="../meshes/ur10e/collision/forearm.stl"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="elbow_joint" type="revolute">
+    <origin rpy="0 0 0" xyz="-0.6120 0 0"/>
+    <parent link="forearm_link"/>
+    <child link="wrist_1_link"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="150" lower="-3.141592653589793" upper="3.141592653589793" velocity="3.141592653589793"/>
+  </joint>
+
+  <!-- ── Link: wrist_2 (carries wrist1 mesh) ── -->
+  <link name="wrist_2_link">
+    <visual>
+      <origin rpy="1.5707963267948966 0 0" xyz="0 0 -0.0127"/>
+      <geometry>
+        <mesh filename="../meshes/ur10e/visual/wrist1.dae"/>
+      </geometry>
+      <material name="ur_grey"><color rgba="0.5 0.5 0.5 1"/></material>
+    </visual>
+    <collision>
+      <origin rpy="1.5707963267948966 0 0" xyz="0 0 -0.0127"/>
+      <geometry>
+        <mesh filename="../meshes/ur10e/collision/wrist1.stl"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="wrist_1_joint" type="revolute">
+    <origin rpy="0 1.5707963267948966 0" xyz="-0.5723 0 0.1149"/>
+    <parent link="wrist_1_link"/>
+    <child link="wrist_2_link"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="54" lower="-6.283185307179586" upper="6.283185307179586" velocity="3.141592653589793"/>
+  </joint>
+
+  <!-- ── Link: wrist_3 (carries wrist2 mesh) ── -->
+  <link name="wrist_3_link">
+    <visual>
+      <origin rpy="1.5707963267948966 0 0" xyz="0 0 -0.0127"/>
+      <geometry>
+        <mesh filename="../meshes/ur10e/visual/wrist2.dae"/>
+      </geometry>
+      <material name="ur_grey"><color rgba="0.5 0.5 0.5 1"/></material>
+    </visual>
+    <collision>
+      <origin rpy="1.5707963267948966 0 0" xyz="0 0 -0.0127"/>
+      <geometry>
+        <mesh filename="../meshes/ur10e/collision/wrist2.stl"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="wrist_2_joint" type="revolute">
+    <origin rpy="0 0 0" xyz="0 0.1157 0"/>
+    <parent link="wrist_2_link"/>
+    <child link="wrist_3_link"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="54" lower="-6.283185307179586" upper="6.283185307179586" velocity="3.141592653589793"/>
+  </joint>
+
+  <!-- ── Link: tool0 (carries wrist3 mesh) ── -->
+  <link name="tool0">
+    <visual>
+      <origin rpy="1.5707963267948966 0 0" xyz="0 0 -0.0127"/>
+      <geometry>
+        <mesh filename="../meshes/ur10e/visual/wrist3.dae"/>
+      </geometry>
+      <material name="ur_grey"><color rgba="0.5 0.5 0.5 1"/></material>
+    </visual>
+    <collision>
+      <origin rpy="1.5707963267948966 0 0" xyz="0 0 -0.0127"/>
+      <geometry>
+        <mesh filename="../meshes/ur10e/collision/wrist3.stl"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="wrist_3_joint" type="revolute">
+    <origin rpy="0 0 0" xyz="0 0 0.1149"/>
+    <parent link="wrist_3_link"/>
+    <child link="tool0"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="54" lower="-6.283185307179586" upper="6.283185307179586" velocity="3.141592653589793"/>
+  </joint>
+
+</robot>

@@ -1,0 +1,72 @@
+{
+  "manufacturer": "Axelent",
+  "series": "X-Guard",
+  "part_series": "W322",
+  "version": "1.0",
+  "filetype": "obj",
+  "units": "mm",
+  "scale": [0.001, 0.001, 0.001],
+  "origin_offset": [0.0, 0.0, 0.0],
+  "panel_y_offset_mm": 650,
+  "notes": [
+    "Panels are centered at the world origin in all axes.",
+    "Height axis is Y (Y-up). Width axis is X. Thickness axis is Z.",
+    "Apply scale to convert mm → metres for threepp.",
+    "Shift Y by +height_mm*0.0005 to place panel bottom at Y=0.",
+    "For Z-axis walls (East/West), rotate 90° around Y before placing."
+  ],
+  "post": {
+    "part_number": "P11-140",
+    "filename": "post.obj",
+    "width_mm": 50,
+    "depth_mm": 50,
+    "height_mm": 1400,
+    "coordinate_system": "z_up",
+    "origin_offset": [4906.11, 3956.41, 0.0],
+    "note": "Exported with absolute world offset in X/Y; requires recentering before use."
+  },
+  "panels": [
+    {
+      "part_number": "W322-075025",
+      "filename": "w322-075025.obj",
+      "width_mm": 250,
+      "height_mm": 750,
+      "cost_eur": 68.0
+    },
+    {
+      "part_number": "W322-075040",
+      "filename": "w322-075040.obj",
+      "width_mm": 400,
+      "height_mm": 750,
+      "cost_eur": 95.0
+    },
+    {
+      "part_number": "W322-075050",
+      "filename": "w322-075050.obj",
+      "width_mm": 500,
+      "height_mm": 750,
+      "cost_eur": 115.0
+    },
+    {
+      "part_number": "W322-075060",
+      "filename": "w322-075060.obj",
+      "width_mm": 600,
+      "height_mm": 750,
+      "cost_eur": 132.0
+    },
+    {
+      "part_number": "W322-075070",
+      "filename": "w322-075070.obj",
+      "width_mm": 700,
+      "height_mm": 750,
+      "cost_eur": 150.0
+    },
+    {
+      "part_number": "W322-075100",
+      "filename": "w322-075100.obj",
+      "width_mm": 1000,
+      "height_mm": 750,
+      "cost_eur": 198.0
+    }
+  ]
+}

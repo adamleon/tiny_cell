@@ -1,0 +1,243 @@
+{
+  "entries": [
+    {
+      "panels_mm": [
+        250
+      ],
+      "total_mm": 250
+    },
+    {
+      "panels_mm": [
+        400
+      ],
+      "total_mm": 400
+    },
+    {
+      "panels_mm": [
+        500
+      ],
+      "total_mm": 500
+    },
+    {
+      "panels_mm": [
+        250,
+        250
+      ],
+      "total_mm": 550
+    },
+    {
+      "panels_mm": [
+        600
+      ],
+      "total_mm": 600
+    },
+    {
+      "panels_mm": [
+        700
+      ],
+      "total_mm": 700
+    },
+    {
+      "panels_mm": [
+        250,
+        500
+      ],
+      "total_mm": 800
+    },
+    {
+      "panels_mm": [
+        400,
+        400
+      ],
+      "total_mm": 850
+    },
+    {
+      "panels_mm": [
+        250,
+        600
+      ],
+      "total_mm": 900
+    },
+    {
+      "panels_mm": [
+        400,
+        500
+      ],
+      "total_mm": 950
+    },
+    {
+      "panels_mm": [
+        1000
+      ],
+      "total_mm": 1000
+    },
+    {
+      "panels_mm": [
+        400,
+        600
+      ],
+      "total_mm": 1050
+    },
+    {
+      "panels_mm": [
+        250,
+        250,
+        500
+      ],
+      "total_mm": 1100
+    },
+    {
+      "panels_mm": [
+        400,
+        700
+      ],
+      "total_mm": 1150
+    },
+    {
+      "panels_mm": [
+        250,
+        250,
+        600
+      ],
+      "total_mm": 1200
+    },
+    {
+      "panels_mm": [
+        500,
+        700
+      ],
+      "total_mm": 1250
+    },
+    {
+      "panels_mm": [
+        250,
+        1000
+      ],
+      "total_mm": 1300
+    },
+    {
+      "panels_mm": [
+        600,
+        700
+      ],
+      "total_mm": 1350
+    },
+    {
+      "panels_mm": [
+        400,
+        400,
+        500
+      ],
+      "total_mm": 1400
+    },
+    {
+      "panels_mm": [
+        400,
+        1000
+      ],
+      "total_mm": 1450
+    },
+    {
+      "panels_mm": [
+        400,
+        400,
+        600
+      ],
+      "total_mm": 1500
+    },
+    {
+      "panels_mm": [
+        500,
+        1000
+      ],
+      "total_mm": 1550
+    },
+    {
+      "panels_mm": [
+        250,
+        250,
+        1000
+      ],
+      "total_mm": 1600
+    },
+    {
+      "panels_mm": [
+        600,
+        1000
+      ],
+      "total_mm": 1650
+    },
+    {
+      "panels_mm": [
+        400,
+        500,
+        700
+      ],
+      "total_mm": 1700
+    },
+    {
+      "panels_mm": [
+        700,
+        1000
+      ],
+      "total_mm": 1750
+    },
+    {
+      "panels_mm": [
+        400,
+        600,
+        700
+      ],
+      "total_mm": 1800
+    },
+    {
+      "panels_mm": [
+        250,
+        500,
+        1000
+      ],
+      "total_mm": 1850
+    },
+    {
+      "panels_mm": [
+        400,
+        400,
+        1000
+      ],
+      "total_mm": 1900
+    },
+    {
+      "panels_mm": [
+        250,
+        600,
+        1000
+      ],
+      "total_mm": 1950
+    },
+    {
+      "panels_mm": [
+        400,
+        500,
+        1000
+      ],
+      "total_mm": 2000
+    },
+    {
+      "panels_mm": [
+        1000,
+        1000
+      ],
+      "total_mm": 2050
+    },
+    {
+      "panels_mm": [
+        400,
+        600,
+        1000
+      ],
+      "total_mm": 2100
+    }
+  ],
+  "max_lookup_mm": 2100,
+  "post_width_mm": 50
+}

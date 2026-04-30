@@ -69,76 +69,61 @@ static LookupResult solve(const LookupTable& table, int desired_mm, bool prefer_
 
 // ── OBJ helpers ───────────────────────────────────────────────────────────────
 
-static float catalogScale(const json& catalog) {
-    return catalog["scale"][0].get<float>();
+static std::shared_ptr<Object3D> buildProto(
+    OBJLoader& loader,
+    const std::string& path,
+    const json& entry,
+    const std::shared_ptr<Material>& mat)
+{
+    auto raw = loader.load(path);
+    if (!raw) throw std::runtime_error("Failed to load: " + path);
+
+    auto off = entry.value("origin_offset", json::array({0.0, 0.0, 0.0}));
+    raw->position.set(off[0].get<float>(), off[1].get<float>(), off[2].get<float>());
+    raw->traverseType<Mesh>([&](Mesh& m) { m.setMaterial(mat); });
+
+    float s = entry["scale"][0].get<float>();
+    auto proto = Group::create();
+    proto->add(raw);
+    proto->scale.set(s, s, s);
+
+    auto up = entry.value("up_axis", json::array({0, 1, 0}));
+    if (up[2].get<float>() > 0.5f)
+        proto->rotation.x = -math::PI / 2.0f;
+
+    return proto;
 }
 
-// Build panel prototypes using scale from catalog. Panels are Y-up, centered at origin.
 static std::map<int, std::shared_ptr<Object3D>> buildPanelProtos(
     OBJLoader& loader,
     const std::string& dir,
     const json& catalog)
 {
-    const float s = catalogScale(catalog);
     auto mat = MeshPhongMaterial::create();
     mat->color = Color(0xa8a8a8);
 
     std::map<int, std::shared_ptr<Object3D>> protos;
     for (const auto& p : catalog["panels"]) {
-        int w         = p["width_mm"].get<int>();
-        std::string f = dir + "/" + p["filename"].get<std::string>();
-        auto grp = loader.load(f);
-        if (!grp) { std::cerr << "Failed to load: " << f << "\n"; continue; }
-        grp->scale.set(s, s, s);
-        grp->traverseType<Mesh>([&](Mesh& m) { m.setMaterial(mat); });
-        protos[w] = grp;
+        int w = p["width_mm"].get<int>();
+        protos[w] = buildProto(loader, dir + "/" + p["filename"].get<std::string>(), p, mat);
     }
     return protos;
 }
 
-// Build post prototype from OBJ using catalog properties:
-//   origin_offset     — raw world offset baked into the OBJ export (subtract to centre)
-//   coordinate_system — "z_up" rotates -90° around X to convert to Y-up
-//   scale             — top-level catalog scale (mm → m)
 static std::shared_ptr<Object3D> buildPostProto(
     OBJLoader& loader,
     const std::string& dir,
     const json& catalog)
 {
     const json& post = catalog["post"];
-    const float s    = catalogScale(catalog);
-
-    std::string f = dir + "/" + post["filename"].get<std::string>();
-    auto raw = loader.load(f);
-    if (!raw) throw std::runtime_error("Failed to load post: " + f);
-
-    // Subtract the baked-in world offset so the post is centred at the local origin.
-    auto off = post.value("origin_offset", json::array({0.0, 0.0, 0.0}));
-    raw->position.set(
-        -off[0].get<float>(),
-        -off[1].get<float>(),
-        -off[2].get<float>());
-
     auto mat = MeshPhongMaterial::create();
     mat->color = Color(0x707070);
-    raw->traverseType<Mesh>([&](Mesh& m) { m.setMaterial(mat); });
-
-    auto proto = Group::create();
-    proto->add(raw);
-    proto->scale.set(s, s, s);
-
-    // Rotate to Y-up if the OBJ was exported in Z-up space.
-    if (post.value("coordinate_system", "y_up") == "z_up")
-        proto->rotation.x = -math::PI / 2.0f;
-
-    return proto;
+    return buildProto(loader, dir + "/" + post["filename"].get<std::string>(), post, mat);
 }
 
 // Build one wall group (X-axis aligned). Caller repositions/rotates for each side.
 static std::shared_ptr<Object3D> buildWall(
     const std::vector<int>& panels_mm,
-    int height_mm,
-    int y_offset_mm,
     const std::map<int, std::shared_ptr<Object3D>>& panelProtos,
     const std::shared_ptr<Object3D>& postProto)
 {
@@ -148,8 +133,7 @@ static std::shared_ptr<Object3D> buildWall(
     for (int w : panels_mm) visual_mm += w + 50;
 
     auto wall = Group::create();
-    float cursor  = visual_mm * -0.0005f;
-    float lift_y  = (height_mm * 0.5f + y_offset_mm) * 0.001f;
+    float cursor = visual_mm * -0.0005f;
 
     // corner post at start
     {
@@ -162,7 +146,7 @@ static std::shared_ptr<Object3D> buildWall(
         int w = panels_mm[i];
 
         auto panel = panelProtos.at(w)->clone();
-        panel->position.set(cursor + w * 0.0005f, lift_y, 0.0f);
+        panel->position.set(cursor + w * 0.0005f, 0.0f, 0.0f);
         wall->add(panel);
 
         cursor += w * 0.001f;
@@ -185,9 +169,6 @@ int main() {
         if (!f) throw std::runtime_error("Cannot open catalog.json");
         catalog = json::parse(f);
     }
-    const int panelH  = catalog["panels"][0]["height_mm"].get<int>();
-    const int yOffset = catalog["panel_y_offset_mm"].get<int>();
-
     auto table = loadTable(assetDir + "/combinations.json");
 
     auto ns = solve(table, kNorthSouthMm, kPreferOver);
@@ -236,20 +217,20 @@ int main() {
     const float hw = ns.actual_mm * 0.0005f;
     const float hd = ew.actual_mm * 0.0005f;
 
-    auto north = buildWall(ns.panels_mm, panelH, yOffset, panelProtos, postProto);
+    auto north = buildWall(ns.panels_mm, panelProtos, postProto);
     north->position.set(0, 0, -hd);
     ss.scene->add(north);
 
-    auto south = buildWall(ns.panels_mm, panelH, yOffset, panelProtos, postProto);
+    auto south = buildWall(ns.panels_mm, panelProtos, postProto);
     south->position.set(0, 0, +hd);
     ss.scene->add(south);
 
-    auto east = buildWall(ew.panels_mm, panelH, yOffset, panelProtos, postProto);
+    auto east = buildWall(ew.panels_mm, panelProtos, postProto);
     east->position.set(+hw, 0, 0);
     east->rotation.y = math::PI / 2.0f;
     ss.scene->add(east);
 
-    auto west = buildWall(ew.panels_mm, panelH, yOffset, panelProtos, postProto);
+    auto west = buildWall(ew.panels_mm, panelProtos, postProto);
     west->position.set(-hw, 0, 0);
     west->rotation.y = math::PI / 2.0f;
     ss.scene->add(west);

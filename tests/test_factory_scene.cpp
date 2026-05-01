@@ -1,6 +1,7 @@
-// Tests for FactoryScene: entity creation, LayoutComponent population, ID mapping.
+// Tests for FactoryScene: entity creation, LayoutComponent, PoseComponent, ID mapping.
 // No threepp dependency. Uses the real solver + combinations.json.
 
+#include <cmath>
 #include <cstdio>
 #include <stdexcept>
 #include <string>
@@ -19,6 +20,10 @@ static int g_run = 0, g_fail = 0;
     do { if (!((a) == (b))) throw std::runtime_error( \
         std::string("REQUIRE_EQ: ") + std::to_string(a) + " != " + std::to_string(b)); } while(0)
 
+#define REQUIRE_NEAR(a, b, eps) \
+    do { if (std::abs(float(a) - float(b)) > float(eps)) throw std::runtime_error( \
+        std::string("REQUIRE_NEAR: ") + std::to_string(a) + " vs " + std::to_string(b)); } while(0)
+
 #define TEST(name) static void test_##name()
 #define RUN(name) \
     do { ++g_run; try { test_##name(); printf("  PASS  " #name "\n"); } \
@@ -30,10 +35,10 @@ static solver::SolverOutput solve_rect(bool with_opening = false) {
     auto table = loadTable("assets/components/fences/axelent_x-guard/combinations.json");
     solver::SolverInput in;
     in.nodes = {
-        {solver::kNewEntity, -2000.f, -1500.f},
-        {solver::kNewEntity,  2000.f, -1500.f},
-        {solver::kNewEntity,  2000.f,  1500.f},
-        {solver::kNewEntity, -2000.f,  1500.f},
+        {solver::kNewEntity, -2000.f, -1500.f},  // SW
+        {solver::kNewEntity,  2000.f, -1500.f},  // SE
+        {solver::kNewEntity,  2000.f,  1500.f},  // NE
+        {solver::kNewEntity, -2000.f,  1500.f},  // NW
     };
     if (with_opening)
         in.unallocated_openings = {{solver::kNewEntity, 500}};
@@ -41,42 +46,41 @@ static solver::SolverOutput solve_rect(bool with_opening = false) {
     return solver::solve(in, table);
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
+// ── Entity count / lifecycle ──────────────────────────────────────────────────
 
-// 4 nodes + 4 edges + 1 opening = 9 entities created
+// Scene entity (ID=1) is always created at construction — counts as 1 entity.
+// With opening: 1 scene + 4 nodes + 4 edges + 1 opening = 10.
 TEST(apply_creates_correct_entity_count) {
     factory::FactoryScene scene;
     scene.apply(solve_rect(true));
+    REQUIRE_EQ(scene.entity_count(), 10u);
+}
+
+// Without an opening: 1 scene + 4 nodes + 4 edges = 9.
+TEST(apply_without_opening_creates_nine_entities) {
+    factory::FactoryScene scene;
+    scene.apply(solve_rect(false));
     REQUIRE_EQ(scene.entity_count(), 9u);
 }
 
-// Without an opening: 4 nodes + 4 edges = 8 entities
-TEST(apply_without_opening_creates_eight_entities) {
-    factory::FactoryScene scene;
-    scene.apply(solve_rect(false));
-    REQUIRE_EQ(scene.entity_count(), 8u);
-}
-
-// apply() is idempotent: calling it twice with the same output must not create new entities
+// apply() is idempotent: same output applied twice must not duplicate entities.
 TEST(apply_twice_is_idempotent) {
     factory::FactoryScene scene;
     auto out = solve_rect(true);
     scene.apply(out);
     scene.apply(out);
-    REQUIRE_EQ(scene.entity_count(), 9u);
+    REQUIRE_EQ(scene.entity_count(), 10u);
 }
 
-// find() returns a valid entity for an ID present in the output
+// ── ID mapping ────────────────────────────────────────────────────────────────
+
 TEST(find_known_id_returns_valid_entity) {
     factory::FactoryScene scene;
     auto out = solve_rect(false);
     scene.apply(out);
-    auto id     = out.nodes[0].entity_id;
-    auto entity = scene.find(id);
-    REQUIRE(entity != entt::null);
+    REQUIRE(scene.find(out.nodes[0].entity_id) != entt::null);
 }
 
-// find() returns entt::null for an ID never seen
 TEST(find_unknown_id_returns_null) {
     factory::FactoryScene scene;
     scene.apply(solve_rect(false));
@@ -84,32 +88,36 @@ TEST(find_unknown_id_returns_null) {
     REQUIRE(scene.find(99999u) == entt::null);
 }
 
-// Every node in the output has a LayoutComponent with role Node
+// ── Scene entity ──────────────────────────────────────────────────────────────
+
+// Scene entity always exists, has PoseComponent with parent == self (world root).
+TEST(scene_entity_is_world_root) {
+    factory::FactoryScene scene;
+    auto se = scene.find(factory::kSceneEntityId);
+    REQUIRE(se != entt::null);
+    const auto& pose = scene.registry().get<factory::PoseComponent>(se);
+    REQUIRE(pose.parent == se);
+}
+
+// Scene entity exists before any apply() call.
+TEST(scene_entity_exists_before_apply) {
+    factory::FactoryScene scene;
+    REQUIRE(scene.entity_count() == 1u);
+    REQUIRE(scene.find(factory::kSceneEntityId) != entt::null);
+}
+
+// ── LayoutComponent ───────────────────────────────────────────────────────────
+
 TEST(node_entities_have_correct_role) {
     factory::FactoryScene scene;
     auto out = solve_rect(false);
     scene.apply(out);
     for (const auto& n : out.nodes) {
-        auto e = scene.find(n.entity_id);
-        REQUIRE(e != entt::null);
-        const auto& lc = scene.registry().get<factory::LayoutComponent>(e);
+        const auto& lc = scene.registry().get<factory::LayoutComponent>(scene.find(n.entity_id));
         REQUIRE(lc.role == factory::LayoutRole::Node);
     }
 }
 
-// Node positions are preserved from solver output
-TEST(node_positions_in_layout_component) {
-    factory::FactoryScene scene;
-    auto out = solve_rect(false);
-    scene.apply(out);
-    for (const auto& n : out.nodes) {
-        const auto& lc = scene.registry().get<factory::LayoutComponent>(scene.find(n.entity_id));
-        REQUIRE(lc.x_mm == n.x_mm);
-        REQUIRE(lc.z_mm == n.z_mm);
-    }
-}
-
-// Node types are preserved
 TEST(node_type_is_post) {
     factory::FactoryScene scene;
     auto out = solve_rect(false);
@@ -120,7 +128,6 @@ TEST(node_type_is_post) {
     }
 }
 
-// Edge LayoutComponents have role Edge
 TEST(edge_entities_have_correct_role) {
     factory::FactoryScene scene;
     auto out = solve_rect(false);
@@ -131,7 +138,6 @@ TEST(edge_entities_have_correct_role) {
     }
 }
 
-// Edge LayoutComponent node_a/node_b point to the correct node entities
 TEST(edge_node_references_are_correct) {
     factory::FactoryScene scene;
     auto out = solve_rect(false);
@@ -145,7 +151,6 @@ TEST(edge_node_references_are_correct) {
     }
 }
 
-// Edge spans_mm are copied verbatim
 TEST(edge_spans_preserved) {
     factory::FactoryScene scene;
     auto out = solve_rect(false);
@@ -156,7 +161,6 @@ TEST(edge_spans_preserved) {
     }
 }
 
-// Opening entity has role DeclaredOpening
 TEST(opening_entity_has_correct_role) {
     factory::FactoryScene scene;
     auto out = solve_rect(true);
@@ -166,49 +170,127 @@ TEST(opening_entity_has_correct_role) {
     REQUIRE(lc.role == factory::LayoutRole::DeclaredOpening);
 }
 
-// Opening parent_edge points to the edge that contains it
 TEST(opening_parent_edge_is_correct) {
     factory::FactoryScene scene;
     auto out = solve_rect(true);
     scene.apply(out);
-    const auto& op_out   = out.edges[0].openings[0];
-    const auto& op_lc    = scene.registry().get<factory::LayoutComponent>(scene.find(op_out.entity_id));
-    REQUIRE(op_lc.parent_edge == scene.find(out.edges[0].entity_id));
-    REQUIRE(op_lc.parent_edge != entt::null);
+    const auto& op_out = out.edges[0].openings[0];
+    const auto& lc     = scene.registry().get<factory::LayoutComponent>(scene.find(op_out.entity_id));
+    REQUIRE(lc.parent_edge == scene.find(out.edges[0].entity_id));
 }
 
-// Opening is edge-allocated: parent_edge set, desired_position_mm absent
+// Edge-allocated: parent_edge set, desired_position_mm absent.
 TEST(opening_is_edge_allocated_not_anchored) {
     factory::FactoryScene scene;
     auto out = solve_rect(true);
     scene.apply(out);
-    const auto& op_out = out.edges[0].openings[0];
-    const auto& lc = scene.registry().get<factory::LayoutComponent>(scene.find(op_out.entity_id));
+    const auto& lc = scene.registry().get<factory::LayoutComponent>(
+        scene.find(out.edges[0].openings[0].entity_id));
     REQUIRE(lc.parent_edge != entt::null);
     REQUIRE(!lc.desired_position_mm.has_value());
 }
 
-// Opening width is preserved
 TEST(opening_width_preserved) {
     factory::FactoryScene scene;
     auto out = solve_rect(true);
     scene.apply(out);
-    const auto& op_out = out.edges[0].openings[0];
-    const auto& lc = scene.registry().get<factory::LayoutComponent>(scene.find(op_out.entity_id));
+    const auto& lc = scene.registry().get<factory::LayoutComponent>(
+        scene.find(out.edges[0].openings[0].entity_id));
     REQUIRE_EQ(lc.width_mm, 500);
 }
 
-// Opening mobility defaults to 0.0 (immovable fail-safe)
 TEST(opening_mobility_defaults_to_zero) {
     factory::FactoryScene scene;
     auto out = solve_rect(true);
     scene.apply(out);
-    const auto& op_out = out.edges[0].openings[0];
-    const auto& lc = scene.registry().get<factory::LayoutComponent>(scene.find(op_out.entity_id));
+    const auto& lc = scene.registry().get<factory::LayoutComponent>(
+        scene.find(out.edges[0].openings[0].entity_id));
     REQUIRE(lc.mobility == 0.0f);
 }
 
-// current_layout() reflects the most recently applied solver output
+// ── PoseComponent ─────────────────────────────────────────────────────────────
+
+// Nodes lie on the factory floor (z == 0) and are children of the scene entity.
+TEST(node_pose_on_floor_with_scene_parent) {
+    factory::FactoryScene scene;
+    auto out = solve_rect(false);
+    scene.apply(out);
+    auto se = scene.find(factory::kSceneEntityId);
+    for (const auto& n : out.nodes) {
+        const auto& pose = scene.registry().get<factory::PoseComponent>(scene.find(n.entity_id));
+        REQUIRE(pose.position.z == 0.f);
+        REQUIRE(pose.parent == se);
+    }
+}
+
+// Node positions match the solver output (x_mm → pos.x, z_mm → pos.y).
+TEST(node_pose_position_matches_solver) {
+    factory::FactoryScene scene;
+    auto out = solve_rect(false);
+    scene.apply(out);
+    for (const auto& n : out.nodes) {
+        const auto& pose = scene.registry().get<factory::PoseComponent>(scene.find(n.entity_id));
+        REQUIRE(pose.position.x == n.x_mm);
+        REQUIRE(pose.position.y == n.z_mm);
+    }
+}
+
+// Edge origin is the midpoint of its two nodes.
+TEST(edge_pose_at_midpoint_of_nodes) {
+    factory::FactoryScene scene;
+    auto out = solve_rect(false);
+    scene.apply(out);
+    // Edge 0: SW(-2000,-1500) → SE(2000,-1500); midpoint = (0, -1500)
+    const auto& ep = scene.registry().get<factory::PoseComponent>(scene.find(out.edges[0].entity_id));
+    REQUIRE_NEAR(ep.position.x,   0.f, 0.01f);
+    REQUIRE_NEAR(ep.position.y, -1500.f, 0.01f);
+    REQUIRE_NEAR(ep.position.z,   0.f, 0.01f);
+}
+
+// Edge parent is the scene entity.
+TEST(edge_pose_parent_is_scene_entity) {
+    factory::FactoryScene scene;
+    auto out = solve_rect(false);
+    scene.apply(out);
+    auto se = scene.find(factory::kSceneEntityId);
+    for (const auto& e : out.edges) {
+        const auto& pose = scene.registry().get<factory::PoseComponent>(scene.find(e.entity_id));
+        REQUIRE(pose.parent == se);
+    }
+}
+
+// Opening's parent in PoseComponent is the edge entity (not the scene entity).
+TEST(opening_pose_parent_is_edge) {
+    factory::FactoryScene scene;
+    auto out = solve_rect(true);
+    scene.apply(out);
+    const auto& op_pose = scene.registry().get<factory::PoseComponent>(
+        scene.find(out.edges[0].openings[0].entity_id));
+    REQUIRE(op_pose.parent == scene.find(out.edges[0].entity_id));
+}
+
+// Opening is centered on a 4000mm edge: local x should be ~0mm (midpoint = center).
+TEST(opening_pose_centered_on_edge) {
+    factory::FactoryScene scene;
+    auto out = solve_rect(true);
+    scene.apply(out);
+    // Edge 0 is 4000mm; opening center is at 2000mm from start → 0mm from midpoint.
+    const auto& op_pose = scene.registry().get<factory::PoseComponent>(
+        scene.find(out.edges[0].openings[0].entity_id));
+    REQUIRE_NEAR(op_pose.position.x, 0.f, 0.01f);
+    REQUIRE_NEAR(op_pose.position.y, 0.f, 0.01f);
+    REQUIRE_NEAR(op_pose.position.z, 0.f, 0.01f);
+}
+
+// A PoseComponent with parent == entt::null means unallocated.
+TEST(default_pose_parent_is_null) {
+    factory::FactoryScene scene;
+    auto& reg = scene.registry();
+    auto  e   = reg.create();
+    auto& p   = reg.emplace<factory::PoseComponent>(e);
+    REQUIRE(p.parent == entt::null);
+}
+
 TEST(current_layout_reflects_last_apply) {
     factory::FactoryScene scene;
     auto out = solve_rect(true);
@@ -222,12 +304,13 @@ int main() {
     printf("Running factory scene tests...\n");
 
     RUN(apply_creates_correct_entity_count);
-    RUN(apply_without_opening_creates_eight_entities);
+    RUN(apply_without_opening_creates_nine_entities);
     RUN(apply_twice_is_idempotent);
     RUN(find_known_id_returns_valid_entity);
     RUN(find_unknown_id_returns_null);
+    RUN(scene_entity_is_world_root);
+    RUN(scene_entity_exists_before_apply);
     RUN(node_entities_have_correct_role);
-    RUN(node_positions_in_layout_component);
     RUN(node_type_is_post);
     RUN(edge_entities_have_correct_role);
     RUN(edge_node_references_are_correct);
@@ -237,6 +320,13 @@ int main() {
     RUN(opening_is_edge_allocated_not_anchored);
     RUN(opening_width_preserved);
     RUN(opening_mobility_defaults_to_zero);
+    RUN(node_pose_on_floor_with_scene_parent);
+    RUN(node_pose_position_matches_solver);
+    RUN(edge_pose_at_midpoint_of_nodes);
+    RUN(edge_pose_parent_is_scene_entity);
+    RUN(opening_pose_parent_is_edge);
+    RUN(opening_pose_centered_on_edge);
+    RUN(default_pose_parent_is_null);
     RUN(current_layout_reflects_last_apply);
 
     printf("\n%d/%d passed", g_run - g_fail, g_run);

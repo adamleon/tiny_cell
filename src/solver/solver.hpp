@@ -17,7 +17,7 @@
 namespace solver {
 
 inline SolverOutput solve(const SolverInput& input, const LookupTable& table) {
-    EntityId next_id = 1;
+    EntityId next_id = 2;  // 1 is reserved for the scene/world entity (kSceneEntityId)
     auto assign = [&](EntityId id) -> EntityId {
         return (id == kNewEntity) ? next_id++ : id;
     };

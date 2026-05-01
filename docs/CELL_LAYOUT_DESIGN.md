@@ -32,7 +32,7 @@ CellLayout
 ├── span_constraints[] — world-space constraints that modify span solving (height limits, etc.)
 └── edges[]            — one per side of the cell polygon (Edge)
       ├── nodeA, nodeB         — stable handles, not integer indices
-      ├── user_openings[]      — UserPlacedOpenings only; other openings derived at solve time
+      ├── user_openings[]      — DeclaredOpenings only; WorldFeatureOpenings derived at solve time
       ├── catalog_ref          — which fence catalog this edge uses
       └── solve_cache          — derived result, invalidated on any mutation
 ```
@@ -65,7 +65,7 @@ Opening (base)
 
 Three concrete subclasses:
 
-**`UserPlacedOpening`** — placed by the user on a specific edge. Stored on the edge.
+**`DeclaredOpening`** — placed by the user on a specific edge. Stored on the edge.
 - `desired_position_mm`: where the user placed it (persistent intent, separate from solved position)
 - `width_mm`: user-defined
 - `mobility`: user-defined (see Mobility below)
@@ -77,14 +77,11 @@ Three concrete subclasses:
 - `collisionBox()`: returns empty — not independently selectable (the world feature is)
 - `mobility()`: returns 0 — position is driven by the world feature, never by the solver
 
-**`SolidWallOpening`** — auto-generated where an edge intersects a solid wall. Not stored on the edge; derived at solve time.
-- `getWidth()`: returns the intersection length
-- `collisionBox()`: returns empty — not selectable
-- `mobility()`: returns 0
+**`WorldFeatureOpening`** covers all world-driven openings: machines, pillars, conveyors, and solid walls. `SolidWall` is a world feature type — its opening behaves identically to any other `WorldFeatureOpening` (not selectable, mobility 0, width from projected intersection). There is no separate `SolidWallOpening` class; the world feature's type determines any downstream behaviour.
 
 ### Mobility
 
-`mobility` controls how much a `UserPlacedOpening` resists displacement when the solver must redistribute available space.
+`mobility` controls how much a `DeclaredOpening` resists displacement when the solver must redistribute available space.
 
 | Value | Behaviour |
 |-------|-----------|
@@ -94,11 +91,11 @@ Three concrete subclasses:
 
 **Default is `0.0` (immovable).** This is a deliberate fail-safe: if an opening is incorrectly deserialised with a missing or zero mobility value, it stays fixed rather than drifting. An immovable conveyor opening is a safe failure; a freely floating one is not.
 
-`WorldFeatureOpening` and `SolidWallOpening` always return `0.0` from the base class default — their position is not the solver's to change.
+`WorldFeatureOpening` always returns `0.0` from the base class default — its position is driven by the world feature, not the solver.
 
 **Displacement distribution**: when the solver must shift openings to satisfy panel snapping or closure constraints, it distributes the required displacement among soft openings in a region proportional to their mobility. Equal-mobility openings move equally; a high-mobility door adjacent to a low-mobility conveyor absorbs most of the displacement.
 
-**Desired vs. actual position**: `desired_position_mm` on `UserPlacedOpening` stores the user's intent and persists across solves. The solver attempts to honour it. When constraints force displacement, the actual (solved) position is stored in the edge's solve cache — not written back to `desired_position_mm`. When constraints relax, the solver can restore openings closer to their desired positions.
+**Desired vs. actual position**: `desired_position_mm` on `DeclaredOpening` stores the user's intent and persists across solves. The solver attempts to honour it. When constraints force displacement, the actual (solved) position is stored in the edge's solve cache — not written back to `desired_position_mm`. When constraints relax, the solver can restore openings closer to their desired positions.
 
 ### 3D Models and Animations
 
@@ -116,7 +113,7 @@ World features exist independently of edges. They have a world position and a fo
 |------|---------|----------------------|
 | Machine | Robot, CNC, press | Adjacent nodes may become `None` |
 | Pillar | Column, post | Node at pillar position |
-| SolidWall | Concrete wall, building wall | Edge becomes `[SolidWallOpening]` |
+| SolidWall | Concrete wall, building wall | Edge becomes `[WorldFeatureOpening]` |
 | ConveyorIO | Fixed conveyor entry/exit | Hard-positioned opening of known width |
 
 ### Span Constraints
@@ -148,7 +145,7 @@ east edge:   [WorldFeatureOpening(machine), FenceSpan]
 
 Example — entire edge inside a solid wall:
 ```
-edge:  [SolidWallOpening]
+edge:  [WorldFeatureOpening(solid_wall)]
 ```
 
 ### NodeType (priority-ordered)
@@ -192,7 +189,7 @@ No coupling to the solver. Produces the same objects a user would declare manual
 The user (or Layer 0) declares:
 - World features and span constraints (positions, footprints, properties)
 - Edge topology (closed polygon)
-- `UserPlacedOpenings` on specific edges
+- `DeclaredOpenings` on specific edges
 - Catalog reference per edge
 
 World feature and solid wall openings are derived automatically. The user does not place them.
@@ -202,7 +199,7 @@ World feature and solid wall openings are derived automatically. The user does n
 For each derived span:
 1. Project world features → `WorldFeatureOpenings`
 2. Project span constraints → split spans at constraint boundaries
-3. Distribute `UserPlacedOpenings` using mobility weights
+3. Distribute `DeclaredOpenings` using mobility weights
 4. For each remaining span, compute desired length and return the **top K valid panel combinations** ranked by the active objective function
 
 This replaces the `prefer_over` / `prefer_under` flag with a proper scored candidate set.
@@ -226,7 +223,7 @@ Given solved edge lengths and opening occupancy at each node, walk the `NodeType
 The edge is the primary selection unit. Clicking any span or opening on an edge selects the whole side. Clicking again narrows to the specific element.
 
 - **Gizmos on an edge**: extend or contract the whole side. Adjacent edges adjust. World feature openings remain fixed; user-placed openings redistribute by mobility.
-- **Dragging a `UserPlacedOpening`**: updates `desired_position_mm`, triggers re-solve. Neighbouring soft openings absorb displacement proportional to their mobility.
+- **Dragging a `DeclaredOpening`**: updates `desired_position_mm`, triggers re-solve. Neighbouring soft openings absorb displacement proportional to their mobility.
 - **`WorldFeature` openings**: not draggable. Follow the world feature. Disappear if the edge moves away.
 - **Collision boxes**: each opening exposes `collisionBox()`. Empty box = not independently selectable. The selection system needs no special-casing.
 
@@ -292,5 +289,5 @@ Before adding any new capability, verify:
 5. Does `NodeType` selection remain a solver output, never a user input?
 6. Do new opening types subclass `Opening` rather than introducing parallel element lists?
 7. Are world features and span constraints kept independent of edges (derived at solve time, not stored on edges)?
-8. Does new data stored on `UserPlacedOpening` distinguish user intent (desired) from solver output (actual)?
+8. Does new data stored on `DeclaredOpening` distinguish user intent (desired) from solver output (actual)?
 9. Does any new mobility-like property default to `0.0` (immovable) as the fail-safe?

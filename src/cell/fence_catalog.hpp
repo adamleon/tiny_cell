@@ -1,35 +1,30 @@
 #pragma once
-#include <fstream>
 #include <map>
 #include <memory>
 #include <stdexcept>
 #include <string>
-#include <nlohmann/json.hpp>
 #include <threepp/loaders/OBJLoader.hpp>
 #include <threepp/materials/MeshPhongMaterial.hpp>
 #include <threepp/math/MathUtils.hpp>
 #include <threepp/objects/Group.hpp>
 #include <threepp/objects/Mesh.hpp>
+#include "fence_catalog_data.hpp"
 
 namespace cell {
 
-// All OBJ prototypes for one fence catalog (panels keyed by width_mm, plus post).
+// OBJ prototypes for one fence catalog: panels keyed by width_mm, post, and
+// the structural edge height (= post height) used by the builder for openings.
 struct CatalogProtos {
     std::map<int, std::shared_ptr<threepp::Object3D>> panels;
-    std::shared_ptr<threepp::Object3D> post;
+    std::shared_ptr<threepp::Object3D>                post;
+    int edge_height_mm = 0;
 };
 
-inline nlohmann::json loadCatalog(const std::string& path) {
-    std::ifstream f(path);
-    if (!f) throw std::runtime_error("Cannot open catalog: " + path);
-    return nlohmann::json::parse(f);
-}
-
 // Shared transform logic for any catalog component.
-// Catalog fields consumed:
-//   origin_offset  [x,y,z]  additive translation of the raw mesh (mm, before scale)
-//   scale          [s,s,s]  mm → metres
-//   up_axis        [x,y,z]  OBJ up direction; [0,0,1] = Z-up → rotate -90° around X
+// Catalog fields:
+//   origin_offset [x,y,z] — additive translation of the raw mesh (mm, before scale)
+//   scale         [s,s,s] — converts mm → metres
+//   up_axis       [x,y,z] — [0,0,1] means Z-up OBJ → rotate -90° around X to become Y-up
 inline std::shared_ptr<threepp::Object3D> buildComponentProto(
     threepp::OBJLoader& loader,
     const std::string& path,
@@ -63,6 +58,7 @@ inline CatalogProtos loadCatalogProtos(
 {
     using namespace threepp;
     CatalogProtos protos;
+    protos.edge_height_mm = catalogEdgeHeight(catalog);
 
     auto panelMat = MeshPhongMaterial::create();
     panelMat->color = Color(0xa8a8a8);

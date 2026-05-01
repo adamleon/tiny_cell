@@ -10,7 +10,8 @@
     "origin_offset: additive translation (mm) applied to the raw mesh before scaling. Use it to both center the mesh and set its installed position.",
     "up_axis: the OBJ's up direction as a unit vector. [0,1,0]=Y-up (no rotation). [0,0,1]=Z-up (rotate -90 deg around X to convert to Y-up).",
     "scale: converts from OBJ units (mm) to scene units (m).",
-    "Panel origin_offset.y = panel_height/2 + floor_clearance (e.g. 375 + 650 = 1025 for this series)."
+    "Panel origin_offset.y = panel_height/2 + floor_clearance (e.g. 375 + 650 = 1025 for this series).",
+    "Edge height: the structural height of the cell boundary equals post.height_mm. Panels may change (mesh, plexiglass, different heights) but the post defines the edge height. Use catalogEdgeHeight() in code — do not add a separate field that could diverge."
   ],
   "post": {
     "part_number": "P11-140",

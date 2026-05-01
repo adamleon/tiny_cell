@@ -36,3 +36,18 @@ target_include_directories(GenLookup PRIVATE
     ${threepp_SOURCE_DIR}/src/external/nlohmann
 )
 target_compile_options(GenLookup PRIVATE -Wall -Wextra)
+
+# ── Unit tests (no threepp; data model + solver only) ────────────────────────
+enable_testing()
+
+add_executable(TestCell tests/test_cell.cpp)
+target_include_directories(TestCell PRIVATE
+    src
+    ${threepp_SOURCE_DIR}/src/external/nlohmann
+)
+target_compile_options(TestCell PRIVATE -Wall -Wextra)
+
+add_test(NAME cell_tests
+    COMMAND TestCell
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)

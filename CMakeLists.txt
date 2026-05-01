@@ -16,6 +16,13 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(threepp)
 
+FetchContent_Declare(
+    entt
+    GIT_REPOSITORY https://github.com/skypjack/entt.git
+    GIT_TAG v3.16.0
+)
+FetchContent_MakeAvailable(entt)
+
 # ── Demo helper ───────────────────────────────────────────────────────────────
 function(add_demo name)
     add_executable(${name} src/demos/${name}.cpp)
@@ -61,5 +68,18 @@ target_compile_options(TestSolver PRIVATE -Wall -Wextra)
 
 add_test(NAME solver_tests
     COMMAND TestSolver
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
+add_executable(TestFactoryScene tests/test_factory_scene.cpp)
+target_link_libraries(TestFactoryScene PRIVATE EnTT::EnTT)
+target_include_directories(TestFactoryScene PRIVATE
+    src
+    ${threepp_SOURCE_DIR}/src/external/nlohmann
+)
+target_compile_options(TestFactoryScene PRIVATE -Wall -Wextra)
+
+add_test(NAME factory_scene_tests
+    COMMAND TestFactoryScene
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )

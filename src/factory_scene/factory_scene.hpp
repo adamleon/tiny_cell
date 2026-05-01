@@ -13,7 +13,7 @@
 // serves as the world root — its parent points to itself.
 //
 // apply(SolverOutput) maps every solver element to an entt::entity:
-//   - Known EntityId → updates LayoutComponent and PoseComponent in place
+//   - Known EntityId → updates the entity's components in place
 //   - Unknown EntityId → creates a new entity, registers the mapping
 
 namespace factory {
@@ -48,10 +48,8 @@ public:
 
         // Nodes first — edges need their PoseComponents to compute midpoints.
         for (const auto& n : output.nodes) {
-            auto e   = get_or_create(n.entity_id);
-            auto& lc = registry_.emplace_or_replace<LayoutComponent>(e);
-            lc.role      = LayoutRole::Node;
-            lc.node_type = n.type;
+            auto e  = get_or_create(n.entity_id);
+            registry_.emplace_or_replace<NodeComponent>(e).type = n.type;
 
             // Nodes lie on the factory floor (z = 0).
             // Solver x_mm/z_mm map to Vec3 x/y in the Z-up floor plane.
@@ -61,44 +59,39 @@ public:
         }
 
         for (const auto& edge : output.edges) {
-            auto e   = get_or_create(edge.entity_id);
-            auto& lc = registry_.emplace_or_replace<LayoutComponent>(e);
-            lc.role        = LayoutRole::Edge;
-            lc.node_a      = get_or_create(edge.node_a_id);
-            lc.node_b      = get_or_create(edge.node_b_id);
-            lc.spans_mm    = edge.spans_mm;
-            lc.catalog_ref = edge.catalog_ref;
+            auto e  = get_or_create(edge.entity_id);
+            auto& ec       = registry_.emplace_or_replace<EdgeComponent>(e);
+            ec.node_a      = get_or_create(edge.node_a_id);
+            ec.node_b      = get_or_create(edge.node_b_id);
+            ec.spans_mm    = edge.spans_mm;
+            ec.catalog_ref = edge.catalog_ref;
 
-            // Edge pose: origin at midpoint, x-axis aligned along the edge direction.
-            const auto& pa  = registry_.get<PoseComponent>(lc.node_a);
-            const auto& pb  = registry_.get<PoseComponent>(lc.node_b);
-            Vec3  dir       = pb.position - pa.position;
-            float len       = glm::length(dir);
-            Vec3  dir_norm  = (len > 0.f) ? dir / len : Vec3{1.f, 0.f, 0.f};
-            float yaw       = std::atan2(dir_norm.y, dir_norm.x);
+            // Edge pose: origin at midpoint, x-axis along the edge direction.
+            const auto& pa = registry_.get<PoseComponent>(ec.node_a);
+            const auto& pb = registry_.get<PoseComponent>(ec.node_b);
+            Vec3  dir      = pb.position - pa.position;
+            float len      = glm::length(dir);
+            Vec3  dnorm    = (len > 0.f) ? dir / len : Vec3{1.f, 0.f, 0.f};
+            float yaw      = std::atan2(dnorm.y, dnorm.x);
 
-            auto& ep        = registry_.emplace_or_replace<PoseComponent>(e);
-            ep.position     = (pa.position + pb.position) * 0.5f;
-            ep.orientation  = glm::angleAxis(yaw, Vec3{0.f, 0.f, 1.f});
-            ep.parent       = scene_ent;
+            auto& ep       = registry_.emplace_or_replace<PoseComponent>(e);
+            ep.position    = (pa.position + pb.position) * 0.5f;
+            ep.orientation = glm::angleAxis(yaw, Vec3{0.f, 0.f, 1.f});
+            ep.parent      = scene_ent;
 
             for (const auto& op : edge.openings) {
-                auto oe   = get_or_create(op.entity_id);
-                auto& olc = registry_.emplace_or_replace<LayoutComponent>(oe);
-                olc.role        = LayoutRole::DeclaredOpening;
-                olc.parent_edge = e;
-                olc.width_mm    = op.width_mm;
-                // desired_position_mm stays absent: solver suggested this position
-                // but the user hasn't anchored it yet (edge-allocated, not anchored).
+                auto oe  = get_or_create(op.entity_id);
+                auto& oc = registry_.emplace_or_replace<DeclaredOpeningComponent>(oe);
+                oc.parent_edge = e;
+                oc.width_mm    = op.width_mm;
+                // desired_position_mm stays absent: solver-assigned, not yet anchored.
 
-                // Opening position in edge-local frame.
-                // op.position_mm is distance from edge start (node_a);
-                // edge origin is the midpoint, so local x = position_mm - len/2.
-                float local_x   = static_cast<float>(op.position_mm) - len * 0.5f;
-                auto& op_pose   = registry_.emplace_or_replace<PoseComponent>(oe);
+                // Local x in edge frame: op.position_mm from node_a; edge origin is midpoint.
+                float local_x       = static_cast<float>(op.position_mm) - len * 0.5f;
+                auto& op_pose       = registry_.emplace_or_replace<PoseComponent>(oe);
                 op_pose.position    = Vec3{local_x, 0.f, 0.f};
                 op_pose.orientation = Quat{1.f, 0.f, 0.f, 0.f};
-                op_pose.parent      = e;  // relative to edge frame
+                op_pose.parent      = e;
             }
         }
     }

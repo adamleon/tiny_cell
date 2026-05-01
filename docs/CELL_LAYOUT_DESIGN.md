@@ -14,6 +14,65 @@ The user declares what exists: a machine here, a conveyor input there, a door so
 
 ---
 
+## Entity/Component Architecture
+
+The scene is managed as an Entity-Component-System using **EnTT**. The `FactoryScene` wraps an EnTT registry and is the single source of truth for all scene state.
+
+### Entities
+
+Every visible or interactive element in the scene is an entity, referenced by a stable `entt::entity` handle. Entities are never referred to by integer indices.
+
+| Entity | Created by | Components |
+|---|---|---|
+| Node | User / blueprint import | Visual, Interactive, Layout |
+| Edge | System (when two nodes connect) | Visual, Interactive, Layout |
+| DeclaredOpening | User (within an edge) | Visual, Interactive, Layout |
+| WorldFeature | User / blueprint import | Visual, Interactive |
+| Robot, Belt, WorkPiece, … | User / simulation | Visual, Interactive, Simulation (future) |
+
+Edge entities are *derived* — the system creates and destroys them as node topology changes — but while they exist they are full scene participants with rendering and interaction. WorldFeature entities have no LayoutComponent: they influence the layout through their footprint but are not fence system participants.
+
+### Components
+
+**VisualComponent** — owns the threepp scene object for this entity. The render system iterates all VisualComponents each frame.
+
+**InteractiveComponent** — owns the hit geometry, gizmo state, and callbacks for click, hover, and drag. The interaction system processes these against user input. An entity without an InteractiveComponent cannot be selected.
+
+**LayoutComponent** — carries the entity's role in the fence layout and the constraint data the solver needs:
+
+- *Node*: world position (X, Z). NodeType is solver output, not stored here.
+- *Edge*: references to its two node entities; catalog ref.
+- *DeclaredOpening*: reference to parent edge entity; `desired_position_mm`; `width_mm`; `mobility`.
+- *WorldFeature*: world position and footprint geometry.
+
+**SimulationComponent** *(future)* — kinematics state for robots, motion state for conveyors, etc.
+
+### Systems
+
+**LayoutSolverSystem** — triggered when any LayoutComponent mutates. Reads all layout-related entities, runs the five-layer solver, and writes the result into a `CellLayout` value stored on the FactoryScene.
+
+**RenderSystem** — runs each frame. Reads the current `CellLayout` and updates VisualComponents accordingly.
+
+**InteractionSystem** — processes input events. Raycasts against InteractiveComponents, invokes callbacks, mutates LayoutComponents, and triggers LayoutSolverSystem.
+
+### Data flow
+
+```
+Entity state (LayoutComponents)
+    ↓  LayoutSolverSystem
+CellLayout  ←  solver output; never serialised
+    ↓  RenderSystem
+threepp scene graph
+    ↓  user input → InteractionSystem → entity mutation
+Entity state (updated)
+    ↓  LayoutSolverSystem (triggered again)
+    …
+```
+
+`CellLayout` is the solver's output, not the primary state. Primary state lives in entity LayoutComponents. `CellLayout` is always recomputed on load.
+
+---
+
 ## Naming
 
 The elements that occupy reserved space on an edge are called **Openings** (`Opening`). This replaces the earlier term "wall component," which implied subordination to a wall.
@@ -24,60 +83,58 @@ An `Opening` is any contiguous section of an edge where no fence panels are buil
 
 ## Data Model
 
+`CellLayout` is the **output of the solver**, not the primary state. Primary state lives in entity LayoutComponents (see Entity/Component Architecture). `CellLayout` is what the render system reads; it is always recomputed from entity state and never serialised.
+
 ### Topology
 
 ```
-CellLayout
-├── world_features[]   — world objects with positions/footprints (machine, pillar, solid wall)
-├── span_constraints[] — world-space constraints that modify span solving (height limits, etc.)
-└── edges[]            — one per side of the cell polygon (Edge)
-      ├── nodeA, nodeB         — stable handles, not integer indices
-      ├── user_openings[]      — DeclaredOpenings only; WorldFeatureOpenings derived at solve time
-      ├── catalog_ref          — which fence catalog this edge uses
-      └── solve_cache          — derived result, invalidated on any mutation
+FactoryScene (EnTT registry — primary state)
+├── Node entities        — world position (X, Z); NodeType is solver output
+├── Edge entities        — refs to nodeA, nodeB; catalog ref
+├── DeclaredOpening entities — ref to parent edge; desired_position_mm; width_mm; mobility
+├── WorldFeature entities    — world position, footprint; no layout role
+└── SpanConstraint entities  — world-space constraint (e.g. height limit); no layout role
+
+CellLayout (solver output — derived, never serialised)
+└── edges[]
+      ├── nodeA, nodeB   — entt::entity handles
+      ├── solve_cache    — merged span/opening sequence, actual positions, panel combinations
+      └── span_constraints — annotations per sub-span
 ```
 
 **The cell is a closed polygon.** Edges connect nodes in a loop. This is a first-class constraint, not an afterthought.
 
-**Node**: a point in scene space (world X, Z) with a `NodeType`. Nodes exist only at corners — places where the wall direction changes. Adding a door or machine cutout to an edge does NOT add a node. Node type is never a user input; it is selected by the solver after edge angles are known (see Corner Resolution).
+**Node**: a point in scene space (world X, Z). Nodes exist only at corners. NodeType is never stored on the node entity — it is selected by the solver after edge angles are known (see Corner Resolution).
 
-**Edge**: one full side of the cell polygon. Connects two nodes. References a fence catalog. The edge is the primary unit of user interaction — selecting any span or opening on an edge selects the whole side. The edge stores only user-placed openings; all other elements are derived at solve time.
+**Edge**: one full side of the cell polygon. Connects two node entities. References a fence catalog. The edge entity is the primary unit of user interaction — clicking any span or opening on an edge selects the whole side. DeclaredOpening entities reference their parent edge; all other openings are derived at solve time.
 
-**FenceSpan**: a section of the edge where fence panels are built. Fully derived — never stored in the primary data model. Spans are the gaps between openings after world feature projections and span constraint splits are applied. Solved panel combinations are cached in the edge's solve cache.
+**FenceSpan**: fully derived — never stored. Spans are the gaps between openings after world feature projections and span constraint splits are applied. Solved panel combinations live in the edge's solve cache.
 
-**Opening**: reserved space on an edge where no fence is built. A polymorphic base class — subclass determines origin, width computation, selectability, and appearance. See below.
+**Opening**: reserved space on an edge where no fence is built. A polymorphic base class used internally by the solver — subclass determines origin and width. See below.
 
-**SpanConstraint**: a world-space object that modifies how spans are solved without removing fence. Does not create an opening. Projects onto edges at solve time, forcing span splits and restricting catalog candidates (e.g. a low ceiling limits available panel heights). Multiple span constraints can overlap; the most restrictive applies.
+**SpanConstraint**: a world-space entity that modifies how spans are solved without removing fence. Does not create an opening. Projects onto edges at solve time, forcing span splits and restricting catalog candidates (e.g. a low ceiling limits available panel heights). Multiple span constraints can overlap; the most restrictive applies.
 
 ### Opening — Polymorphic Interface
 
-`Opening` is a **base class with virtual methods**, not a tagged union. The interface grows meaningfully per subclass (width computation, selectability, collision box, asset reference) and virtual dispatch is the appropriate mechanism.
+`Opening` is a **solver-internal base class**, not a stored data structure. The solver instantiates openings transiently when computing the edge element sequence. Selectability, hit geometry, and visual assets are handled by ECS components — not by the Opening class.
 
 ```
 Opening (base)
-├── getWidth() const        — width of reserved space in mm
-├── getPosition() const     — position from edge start in mm (actual/solved position)
-├── mobility() const        — returns 0.0f by default (immovable); see Mobility below
-├── collisionBox() const    — returns empty box by default (not selectable)
-├── isEditable() const      — returns false by default
-└── assetKey() const        — reference to visualization asset (3D model, etc.)
+├── getWidth()    const — width of reserved space in mm
+├── getPosition() const — actual solved position from edge start in mm
+└── mobility()    const — returns 0.0f by default (immovable fail-safe)
 ```
 
-Three concrete subclasses:
+Two concrete subclasses:
 
-**`DeclaredOpening`** — placed by the user on a specific edge. Stored on the edge.
-- `desired_position_mm`: where the user placed it (persistent intent, separate from solved position)
-- `width_mm`: user-defined
-- `mobility`: user-defined (see Mobility below)
-- `collisionBox()`: returns the opening's footprint — selectable and draggable
-- `isEditable()`: true
+**`DeclaredOpening`** — constructed by the solver from a DeclaredOpening entity's LayoutComponent.
+- `desired_position_mm`: read from the entity (persistent user intent)
+- `width_mm`: read from the entity
+- `mobility()`: read from the entity
 
-**`WorldFeatureOpening`** — auto-generated when an edge intersects a world feature footprint. Not stored on the edge; derived at solve time.
-- `getWidth()`: queries the referenced world feature for the projected intersection length
-- `collisionBox()`: returns empty — not independently selectable (the world feature is)
+**`WorldFeatureOpening`** — constructed by the solver when an edge intersects a world feature footprint. Not stored anywhere; derived at solve time. Covers machines, pillars, conveyors, solid walls.
+- `getWidth()`: queries the referenced world feature entity for the projected intersection length
 - `mobility()`: returns 0 — position is driven by the world feature, never by the solver
-
-**`WorldFeatureOpening`** covers all world-driven openings: machines, pillars, conveyors, and solid walls. `SolidWall` is a world feature type — its opening behaves identically to any other `WorldFeatureOpening` (not selectable, mobility 0, width from projected intersection). There is no separate `SolidWallOpening` class; the world feature's type determines any downstream behaviour.
 
 ### Mobility
 
@@ -99,7 +156,7 @@ Three concrete subclasses:
 
 ### 3D Models and Animations
 
-3D geometry and animations are **not stored in the data model**. `Opening` and `WorldFeature` carry an `assetKey` — a catalog reference or path — that the visualization layer resolves to geometry. This is consistent with the existing pattern: `fence_catalog.hpp` reads JSON, `cell_builder.hpp` builds scene objects. The data model is serializable and rendering-independent.
+3D geometry and animations live in **VisualComponent**, not in the data model or the solver. The VisualComponent holds an asset key that the render system resolves to threepp geometry. The solver and LayoutComponent are rendering-independent and serialisable.
 
 ### Solve Cache
 
@@ -163,14 +220,9 @@ When the solver determines the angle and occupancy at a node, it selects the bes
 
 Node type is never a user input for a generated cell. It is always a solver output.
 
-### Node References
+### Entity References
 
-Nodes are referenced by **stable handles**, not integer indices into a vector. Raw integer indices are explicitly rejected:
-- Inserting or removing nodes invalidates all indices silently
-- No type safety (`int` is `int`)
-- No reverse navigation (node → its connected edges) without a full scan
-
-The specific mechanism (typed ID, stable-pointer storage, etc.) is an implementation decision, but the interface must not expose raw integers.
+All cross-entity references use **`entt::entity` handles** from the EnTT registry. These are stable across insertion and deletion (generation counters detect stale handles). Raw integer indices are explicitly rejected — they silently invalidate on insertion or removal, carry no type safety, and require a full scan for reverse navigation.
 
 ---
 
@@ -186,13 +238,13 @@ No coupling to the solver. Produces the same objects a user would declare manual
 
 ### Layer 1 — Topology Definition
 
-The user (or Layer 0) declares:
-- World features and span constraints (positions, footprints, properties)
-- Edge topology (closed polygon)
-- `DeclaredOpenings` on specific edges
-- Catalog reference per edge
+The solver reads from entity LayoutComponents:
+- WorldFeature and SpanConstraint entities (positions, footprints, properties)
+- Node and Edge entities forming the closed polygon
+- DeclaredOpening entities on specific edges
+- Catalog reference from each Edge entity's LayoutComponent
 
-World feature and solid wall openings are derived automatically. The user does not place them.
+WorldFeatureOpenings are derived automatically. The user does not place them.
 
 ### Layer 2 — Per-Span Candidate Generation
 
@@ -220,14 +272,16 @@ Given solved edge lengths and opening occupancy at each node, walk the `NodeType
 
 ## User Interaction Model
 
-The edge is the primary selection unit. Clicking any span or opening on an edge selects the whole side. Clicking again narrows to the specific element.
+Interaction is handled entirely through **InteractiveComponent**. Entities without an InteractiveComponent cannot be selected. The interaction system raycasts against hit geometry owned by InteractiveComponents — no special-casing per entity type.
 
-- **Gizmos on an edge**: extend or contract the whole side. Adjacent edges adjust. World feature openings remain fixed; user-placed openings redistribute by mobility.
-- **Dragging a `DeclaredOpening`**: updates `desired_position_mm`, triggers re-solve. Neighbouring soft openings absorb displacement proportional to their mobility.
-- **`WorldFeature` openings**: not draggable. Follow the world feature. Disappear if the edge moves away.
-- **Collision boxes**: each opening exposes `collisionBox()`. Empty box = not independently selectable. The selection system needs no special-casing.
+The edge is the primary selection unit. Clicking any span or opening on an edge selects the whole edge entity. Clicking again narrows to the specific child entity (e.g. a DeclaredOpening entity).
 
-Alignment is implicit: all elements on the same edge are on the same side by definition.
+- **Gizmos on an edge entity**: extend or contract the whole side. Adjacent edges adjust. WorldFeatureOpening positions are fixed; DeclaredOpening entities redistribute by mobility.
+- **Dragging a DeclaredOpening entity**: the InteractiveComponent updates `desired_position_mm` in the entity's LayoutComponent, triggering LayoutSolverSystem. Neighbouring soft openings absorb displacement proportional to their mobility.
+- **WorldFeature entities**: dragging moves the world feature. The LayoutSolverSystem re-derives WorldFeatureOpenings on affected edges.
+- **SpanConstraint entities**: no direct drag; properties (e.g. max height) edited via inspector.
+
+Alignment is implicit: all entities on the same edge are on the same side by definition.
 
 ---
 
@@ -291,3 +345,7 @@ Before adding any new capability, verify:
 7. Are world features and span constraints kept independent of edges (derived at solve time, not stored on edges)?
 8. Does new data stored on `DeclaredOpening` distinguish user intent (desired) from solver output (actual)?
 9. Does any new mobility-like property default to `0.0` (immovable) as the fail-safe?
+10. Is every new visible or interactive element an entity in the EnTT registry?
+11. Is new rendering logic in VisualComponent / RenderSystem, not in the solver or data model?
+12. Is new interaction logic in InteractiveComponent / InteractionSystem, not in the solver or data model?
+13. Does any new cross-entity reference use `entt::entity` handles, never raw integer indices?

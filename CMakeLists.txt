@@ -51,3 +51,15 @@ add_test(NAME cell_tests
     COMMAND TestCell
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
+
+add_executable(TestSolver tests/test_solver.cpp)
+target_include_directories(TestSolver PRIVATE
+    src
+    ${threepp_SOURCE_DIR}/src/external/nlohmann
+)
+target_compile_options(TestSolver PRIVATE -Wall -Wextra)
+
+add_test(NAME solver_tests
+    COMMAND TestSolver
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)

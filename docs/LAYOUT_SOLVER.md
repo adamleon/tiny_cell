@@ -6,7 +6,44 @@
 
 The user declares what exists: a machine here, a conveyor input there, a door somewhere on the east wall. The solver finds the smallest valid enclosure that satisfies all constraints, optimised by an objective function. Target dimensions ("approximately 4000mm wide") are soft inputs, not hard requirements. Panel snapping takes priority over target dimensions.
 
-The solver reads entity LayoutComponents as its input (see [ENTITY_SYSTEM.md](ENTITY_SYSTEM.md)) and writes a `CellLayout` as its output. It has no knowledge of rendering, interaction, or scene state beyond what LayoutComponents provide.
+The solver is a **pure function**: it receives a typed `SolverInput` and returns a `CellLayout`. It has no stored state, no knowledge of EnTT, and no access to entity LayoutComponents directly. A `SolverInputBuilder` (part of the system layer) translates entity state into `SolverInput` before each solve. The FactoryScene owns the current `CellLayout` between solves.
+
+---
+
+## Solver Contract
+
+### Stateless pure function
+
+The solver stores no state between calls. Its signature is:
+
+```
+solve(SolverInput) → CellLayout
+```
+
+The `CellLayout` produced by one call may be passed back as a warm start in the next call, but this is an optimisation hint — the solver is not required to use it, and the result must be valid regardless of whether a warm start is provided. The FactoryScene owns the current `CellLayout`; it holds it between solves and passes it in when triggering the next one.
+
+### SolverInputBuilder
+
+The solver never touches the EnTT registry. A `SolverInputBuilder` in the system layer reads entity LayoutComponents and constructs a `SolverInput`. This is the only translation point between the entity world and the solver world. If the LayoutComponent schema changes, only the builder needs updating — the solver is unaffected.
+
+### SolverInput structure
+
+```
+SolverInput
+├── nodes[]                 — world positions (X, Z) for each node entity
+├── edges[]                 — topology + catalog ref + edge-allocated openings
+│     └── openings[]        — DeclaredOpenings with a parent_edge set
+├── unallocated_openings[]  — DeclaredOpenings with no parent_edge; solver assigns edge + position
+├── world_features[]        — world positions and footprints
+├── span_constraints[]      — world-space height/catalog restrictions
+└── warm_start?             — previous CellLayout; absent on first solve
+```
+
+Unallocated openings are a first-class pool in `SolverInput`, not attached to any edge. The solver assigns them to edges and positions as part of Layer 3. Until the user explicitly accepts a solver assignment (see Allocation States below), the opening remains in the unallocated pool on the next solve.
+
+### The solver never writes to entity state
+
+The solver returns a `CellLayout`. It never mutates a LayoutComponent, never sets `parent_edge`, never sets `desired_position_mm`. Those are user actions. The RenderSystem reads `CellLayout` and displays the solver's suggestion visually. The user accepts it — anchoring the opening — through an explicit interaction, which the InteractionSystem writes back to the LayoutComponent.
 
 ---
 
@@ -33,11 +70,21 @@ Selectability, hit geometry, and visual assets are handled by ECS components —
 
 ### DeclaredOpening
 
-Constructed by the solver from a DeclaredOpening entity's LayoutComponent. Represents space the user has intentionally reserved on an edge: a door, a conveyor pass-through, a slab panel, or any other user-defined gap.
+Constructed by the solver from a DeclaredOpening entity's LayoutComponent. Represents space the user has intentionally reserved: a door, a conveyor pass-through, a slab, or any other user-defined gap.
 
-- `desired_position_mm` — read from the entity; stores the user's intent; persists across solves
-- `width_mm` — read from the entity
-- `mobility()` — read from the entity (see Mobility below)
+A DeclaredOpening exists in one of three allocation states, determined entirely by which optional fields are set on the entity's LayoutComponent:
+
+| State | `parent_edge` | `desired_position_mm` | Solver freedom |
+|---|---|---|---|
+| **Unallocated** | absent | absent | Solver chooses edge and position |
+| **Edge-allocated** | set | absent | Solver chooses position within edge |
+| **Anchored** | set | set | Solver displaces within `mobility` |
+
+Unallocated openings enter `SolverInput.unallocated_openings[]`. Edge-allocated and anchored openings enter `SolverInput.edges[].openings[]` under their parent edge.
+
+- `width_mm` — always present; read from the entity
+- `desired_position_mm` — present only when anchored
+- `mobility()` — read from the entity; `0.0` default means immovable once anchored
 
 ### WorldFeatureOpening
 
@@ -154,13 +201,14 @@ No coupling to the solver. Produces the same entity state a user would declare m
 
 ### Layer 1 — Topology Definition
 
-The solver reads from entity LayoutComponents:
-- WorldFeature and SpanConstraint entities (positions, footprints, properties)
-- Node and Edge entities forming the closed polygon
-- DeclaredOpening entities on specific edges
-- Catalog reference from each Edge entity's LayoutComponent
+The `SolverInputBuilder` has already translated entity LayoutComponents into `SolverInput` before the solver is called. Layer 1 reads from that typed structure:
 
-WorldFeatureOpenings are derived automatically at this stage. The user does not place them.
+- Node positions forming the closed polygon
+- Edge topology and catalog references
+- DeclaredOpenings: edge-allocated and anchored openings under their parent edge; unallocated openings in the pool
+- WorldFeature footprints and SpanConstraint regions
+
+WorldFeatureOpenings are derived at this stage by projecting world feature footprints onto edge geometry. The user does not place them.
 
 ### Layer 2 — Per-Span Candidate Generation
 
@@ -175,6 +223,8 @@ If a world feature opening leaves insufficient room for even the smallest valid 
 ### Layer 3 — Global Closure Solving
 
 Select one combination per span such that the polygon closes exactly (sum of edge vectors = 0). For small cells: exhaustive search. For larger cells: constraint propagation or branch-and-bound.
+
+Unallocated openings are assigned to edges here. Their edge and position are free variables in the optimisation — the solver jointly minimises the objective over panel combinations, closure, and opening placement. The result is a complete assignment for every unallocated opening, stored in `CellLayout`. It is not written back to any LayoutComponent.
 
 The global objective function is applied here: among all closure-consistent solutions, pick the best-scoring one.
 

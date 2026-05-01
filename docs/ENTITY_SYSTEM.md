@@ -25,7 +25,7 @@ Every visible or interactive element is an entity, referenced by a stable `entt:
 |---|---|---|
 | Node | User / blueprint import | Visual, Interactive, Layout |
 | Edge | System (when two nodes connect) | Visual, Interactive, Layout |
-| DeclaredOpening | User (within an edge) | Visual, Interactive, Layout |
+| DeclaredOpening | User (may be unallocated — no edge yet) | Visual, Interactive, Layout |
 | WorldFeature | User / blueprint import | Visual, Interactive |
 | SpanConstraint | User / blueprint import | Interactive |
 | Robot | User / blueprint import | Visual, Interactive, Simulation (future) |
@@ -62,7 +62,7 @@ The callbacks mutate LayoutComponent data and trigger LayoutSolverSystem. They d
 
 ### LayoutComponent
 
-Carries the entity's role in the fence layout and the constraint data the solver needs. This is the primary input to LayoutSolverSystem.
+Carries the entity's role in the fence layout and the constraint data the solver needs. LayoutComponents are **never read directly by the solver** — a `SolverInputBuilder` translates them into a typed `SolverInput` before each solve. This decouples the solver from EnTT and means the solver can be tested without a registry.
 
 Each entity type uses a subset of the fields:
 
@@ -78,10 +78,10 @@ Edge
   catalog_ref     string
 
 DeclaredOpening
-  parent_edge          entt::entity
-  desired_position_mm  int
-  width_mm             int
-  mobility             float   (0.0 = immovable, default and fail-safe)
+  parent_edge          entt::entity?   — absent if unallocated (solver assigns edge)
+  desired_position_mm  int?            — absent if floating  (solver assigns position)
+  width_mm             int             — always present
+  mobility             float           — 0.0 = immovable (default and fail-safe)
 
 WorldFeature
   type                 enum (Machine | Pillar | SolidWall | ConveyorIO)
@@ -91,6 +91,8 @@ SpanConstraint
   footprint            polygon or AABB in world space
   max_height_mm        int     (or other constraint property)
 ```
+
+A DeclaredOpening's allocation state is determined by which optional fields are set — no separate flag is needed. See [LAYOUT_SOLVER.md](LAYOUT_SOLVER.md) for how the solver handles each state.
 
 The LayoutComponent is serialisable and rendering-independent. Node positions are read from the entity's world transform rather than stored separately, keeping position as the single source of truth.
 
@@ -106,7 +108,7 @@ Carries kinematics state for robots, motion state for conveyors, and pick/place 
 
 **Trigger:** any LayoutComponent mutation.
 
-Reads all layout-related entities from the registry, runs the five-layer solver (see [LAYOUT_SOLVER.md](LAYOUT_SOLVER.md)), and writes the result as a `CellLayout` value stored on the FactoryScene. CellLayout is the solver's output — it is never serialised and always recomputed from entity state.
+Uses `SolverInputBuilder` to translate entity LayoutComponents into a `SolverInput`, then calls the solver. The current `CellLayout` stored on the FactoryScene is passed in as a warm start. The solver returns a new `CellLayout` which replaces the previous one on the FactoryScene. CellLayout is never serialised — it is always recomputed from entity state.
 
 ### RenderSystem
 
@@ -131,8 +133,11 @@ Steps the physics simulation and robot kinematics. Writes world transforms back 
 ```
 Entity state (LayoutComponents)
     │
-    ▼  LayoutSolverSystem
-CellLayout  ─── solver output, stored on FactoryScene, never serialised
+    ▼  SolverInputBuilder  (part of LayoutSolverSystem)
+SolverInput + warm_start CellLayout?
+    │
+    ▼  Solver  (pure function, no EnTT dependency)
+CellLayout  ─── stored on FactoryScene, never serialised
     │
     ▼  RenderSystem
 threepp scene graph

@@ -1,5 +1,6 @@
 #include <algorithm>
 
+#include <threepp/scenes/Fog.hpp>
 #include "common/scene_setup.hpp"
 #include "cell/fence_catalog.hpp"
 #include "cell/fence_solver.hpp"
@@ -27,18 +28,27 @@ int main() {
 
     // ── Scene setup ───────────────────────────────────────────────────────────
     SceneSetup ss("FenceWalls");
-    ss.scene->background = Color(0x1a1f2e);
+    ss.scene->background = Color(0x1a1614);
+    ss.scene->fog         = Fog(Color(0x1a1614), 8.0f, 28.0f);
     ss.camera->position.set(7.0f, 5.0f, 9.0f);
     ss.camera->lookAt({0, 0.5f, 0});
     ss.controls->target = {0, 0.5f, 0};
     ss.controls->update();
 
-    ss.scene->add(AmbientLight::create(0xffffff, 0.4f));
+    // Warm amber key — upper right
     {
-        auto sun = DirectionalLight::create(0xffffff, 0.8f);
-        sun->position.set(5, 10, 7);
-        ss.scene->add(sun);
+        auto key = DirectionalLight::create(0xffd580, 1.3f);
+        key->position.set(6, 9, 4);
+        ss.scene->add(key);
     }
+    // Cool blue-purple fill — opposite side
+    {
+        auto fill = DirectionalLight::create(0x7080c0, 0.35f);
+        fill->position.set(-5, 4, -6);
+        ss.scene->add(fill);
+    }
+    // Very low warm ambient — lifts shadows without washing out
+    ss.scene->add(AmbientLight::create(0x2a1f0f, 0.5f));
 
     // Floor — sized from solved node positions in ECS.
     {
@@ -54,10 +64,14 @@ int main() {
                 min_z = std::min(min_z, p.position.y);
                 max_z = std::max(max_z, p.position.y);
             });
-        auto geo = PlaneGeometry::create((max_x - min_x) * 0.001f,
-                                         (max_z - min_z) * 0.001f);
+        // Extend floor beyond the fence to give it a stage/ground feel.
+        const float margin = 2.0f;
+        auto geo = PlaneGeometry::create((max_x - min_x) * 0.001f + margin,
+                                         (max_z - min_z) * 0.001f + margin);
         auto mat = MeshPhongMaterial::create();
-        mat->color = Color(0x2a2a2a);
+        mat->color     = Color(0x1c1a18);
+        mat->specular  = Color(0x886644);
+        mat->shininess = 70;
         auto floor = Mesh::create(geo, mat);
         floor->rotation.x = -math::PI / 2.f;
         ss.scene->add(floor);

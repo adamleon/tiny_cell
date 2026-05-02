@@ -18,6 +18,7 @@ struct CatalogProtos {
     std::map<int, std::shared_ptr<threepp::Object3D>> panels;
     std::shared_ptr<threepp::Object3D>                post;
     int edge_height_mm = 0;
+    int post_width_mm  = 50;
 };
 
 // Shared transform logic for any catalog component.
@@ -59,9 +60,12 @@ inline CatalogProtos loadCatalogProtos(
     using namespace threepp;
     CatalogProtos protos;
     protos.edge_height_mm = catalogEdgeHeight(catalog);
+    protos.post_width_mm  = catalogPostWidth(catalog);
 
     auto panelMat = MeshPhongMaterial::create();
-    panelMat->color = Color(0xa8a8a8);
+    panelMat->color     = Color(0xa8a8a8);
+    panelMat->specular  = Color(0x998866);
+    panelMat->shininess = 60;
     for (const auto& p : catalog["panels"]) {
         int w = p["width_mm"].get<int>();
         protos.panels[w] = buildComponentProto(
@@ -69,7 +73,9 @@ inline CatalogProtos loadCatalogProtos(
     }
 
     auto postMat = MeshPhongMaterial::create();
-    postMat->color = Color(0x707070);
+    postMat->color     = Color(0x707070);
+    postMat->specular  = Color(0x775544);
+    postMat->shininess = 80;
     const auto& post = catalog["post"];
     protos.post = buildComponentProto(
         loader, dir + "/" + post["filename"].get<std::string>(), post, postMat);

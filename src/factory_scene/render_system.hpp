@@ -62,9 +62,11 @@ inline std::shared_ptr<threepp::Object3D> buildScene(
                       [](const OpInfo& a, const OpInfo& b) { return a.local_x < b.local_x; });
 
             // Total visual width (mm): spans + openings + 2 boundary posts per opening.
+            const float pw_m = protos.post_width_mm * 0.001f;
+            const float hw_m = pw_m * 0.5f;
             int total_mm = 0;
             for (const auto& s : ec.spans_mm) total_mm += detail::spanVisualMm(s);
-            for (const auto& op : ops) total_mm += op.width_mm + 100;  // +50mm post each side
+            for (const auto& op : ops) total_mm += op.width_mm + 2 * protos.post_width_mm;
 
             float cursor = -total_mm * 0.0005f;  // start at -half_m in edge-local X
             auto grp = Group::create();
@@ -82,18 +84,18 @@ inline std::shared_ptr<threepp::Object3D> buildScene(
                     cursor += w_m;
                     if (j < np - 1) {
                         auto post = protos.post->clone();
-                        post->position.set(cursor + 0.025f, 0.f, 0.f);
+                        post->position.set(cursor + hw_m, 0.f, 0.f);
                         grp->add(post);
-                        cursor += 0.05f;
+                        cursor += pw_m;
                     }
                 }
                 // Post + opening + post between span[i] and span[i+1].
                 if (i < static_cast<int>(ops.size())) {
                     auto add_post = [&] {
                         auto post = protos.post->clone();
-                        post->position.set(cursor + 0.025f, 0.f, 0.f);
+                        post->position.set(cursor + hw_m, 0.f, 0.f);
                         grp->add(post);
-                        cursor += 0.05f;
+                        cursor += pw_m;
                     };
 
                     add_post();  // post on the left side of the opening
@@ -102,9 +104,11 @@ inline std::shared_ptr<threepp::Object3D> buildScene(
                     float oh_m = protos.edge_height_mm * 0.001f;
                     auto geo   = BoxGeometry::create(ow_m, oh_m, 0.05f);
                     auto mat   = MeshPhongMaterial::create();
-                    mat->color       = Color(0x4a7fc1);
+                    mat->color       = Color(0xc8a060);
+                    mat->specular    = Color(0xffd580);
+                    mat->shininess   = 40;
                     mat->transparent = true;
-                    mat->opacity     = 0.85f;
+                    mat->opacity     = 0.75f;
                     auto box = Mesh::create(geo, mat);
                     box->position.set(cursor + ow_m * 0.5f, oh_m * 0.5f, 0.f);
                     grp->add(box);

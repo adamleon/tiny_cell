@@ -2,7 +2,16 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "fence_walls",
+            "name": "fence_walls (Windows)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/Release/fence_walls.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "cmake build"
+        },
+        {
+            "name": "fence_walls (Linux/Mac)",
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/build/fence_walls",
@@ -19,7 +28,16 @@
             ]
         },
         {
-            "name": "GenLookup",
+            "name": "GenLookup (Windows)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/Release/GenLookup.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "cmake build"
+        },
+        {
+            "name": "GenLookup (Linux/Mac)",
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/build/GenLookup",

@@ -20,6 +20,7 @@
             "command": "cmake",
             "args": [
                 "--build", "${workspaceFolder}/build",
+                "--config", "Release",
                 "--parallel", "4"
             ],
             "dependsOn": ["cmake configure"],

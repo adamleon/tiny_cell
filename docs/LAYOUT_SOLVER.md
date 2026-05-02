@@ -6,7 +6,7 @@
 
 The user declares what exists: a machine here, a conveyor input there, a door somewhere on the east wall. The solver finds the smallest valid enclosure that satisfies all constraints, optimised by an objective function. Target dimensions ("approximately 4000mm wide") are soft inputs, not hard requirements. Panel snapping takes priority over target dimensions.
 
-The solver is a **pure function**: it receives a typed `SolverInput` and returns a `CellLayout`. It has no stored state, no knowledge of EnTT, and no access to entity LayoutComponents directly. A `SolverInputBuilder` (part of the system layer) translates entity state into `SolverInput` before each solve. The FactoryScene owns the current `CellLayout` between solves.
+The solver is a **pure function**: it receives a typed `SolverInput` and returns a `SolverOutput`. It has no stored state, no knowledge of EnTT, and no direct access to entity components. A `SolverInputBuilder` (part of the system layer) translates entity state into `SolverInput` before each solve. The FactoryScene retains the last `SolverOutput` between solves as a warm-start hint only — the ECS is the source of truth.
 
 ---
 
@@ -17,14 +17,14 @@ The solver is a **pure function**: it receives a typed `SolverInput` and returns
 The solver stores no state between calls. Its signature is:
 
 ```
-solve(SolverInput) → CellLayout
+solve(SolverInput) → SolverOutput
 ```
 
-The `CellLayout` produced by one call may be passed back as a warm start in the next call, but this is an optimisation hint — the solver is not required to use it, and the result must be valid regardless of whether a warm start is provided. The FactoryScene owns the current `CellLayout`; it holds it between solves and passes it in when triggering the next one.
+The `SolverOutput` produced by one call may be passed back as a warm start in the next call, but this is an optimisation hint — the solver is not required to use it, and the result must be valid regardless of whether a warm start is provided.
 
 ### SolverInputBuilder
 
-The solver never touches the EnTT registry. A `SolverInputBuilder` in the system layer reads entity LayoutComponents and constructs a `SolverInput`. This is the only translation point between the entity world and the solver world. If the LayoutComponent schema changes, only the builder needs updating — the solver is unaffected.
+The solver never touches the EnTT registry. A `SolverInputBuilder` in the system layer reads entity components and constructs a `SolverInput`. This is the only translation point between the entity world and the solver world. If a component's schema changes, only the builder needs updating — the solver is unaffected.
 
 ### SolverInput structure
 
@@ -36,14 +36,14 @@ SolverInput
 ├── unallocated_openings[]  — DeclaredOpenings with no parent_edge; solver assigns edge + position
 ├── world_features[]        — world positions and footprints
 ├── span_constraints[]      — world-space height/catalog restrictions
-└── warm_start?             — previous CellLayout; absent on first solve
+└── warm_start?             — previous SolverOutput; absent on first solve
 ```
 
 Unallocated openings are a first-class pool in `SolverInput`, not attached to any edge. The solver assigns them to edges and positions as part of Layer 3. Until the user explicitly accepts a solver assignment (see Allocation States below), the opening remains in the unallocated pool on the next solve.
 
 ### The solver never writes to entity state
 
-The solver returns a `CellLayout`. It never mutates a LayoutComponent, never sets `parent_edge`, never sets `desired_position_mm`. Those are user actions. The RenderSystem reads `CellLayout` and displays the solver's suggestion visually. The user accepts it — anchoring the opening — through an explicit interaction, which the InteractionSystem writes back to the LayoutComponent.
+The solver returns a `SolverOutput`. It never mutates entity components, never sets `parent_edge`, never sets `desired_position_mm`. Those are user actions. `FactoryScene.apply()` translates `SolverOutput` into updated ECS components — positions, span data, SpanType decisions. The ECS is the source of truth after `apply()` completes; the RenderSystem reads entity components, not the raw `SolverOutput`. The user accepts a solver suggestion — anchoring an opening — through an explicit interaction, which the InteractionSystem writes back to the `DeclaredOpeningComponent`.
 
 ---
 
@@ -70,9 +70,9 @@ Selectability, hit geometry, and visual assets are handled by ECS components —
 
 ### DeclaredOpening
 
-Constructed by the solver from a DeclaredOpening entity's LayoutComponent. Represents space the user has intentionally reserved: a door, a conveyor pass-through, a slab, or any other user-defined gap.
+Constructed by the solver from a `DeclaredOpeningComponent`. Represents space the user has intentionally reserved: a door, a conveyor pass-through, a slab, or any other user-defined gap.
 
-A DeclaredOpening exists in one of three allocation states, determined entirely by which optional fields are set on the entity's LayoutComponent:
+A DeclaredOpening exists in one of three allocation states, determined entirely by which optional fields are set on the `DeclaredOpeningComponent`:
 
 | State | `parent_edge` | `desired_position_mm` | Solver freedom |
 |---|---|---|---|
@@ -113,23 +113,28 @@ WorldFeatureOpenings always return `0.0` — their position is driven by the wor
 
 **Displacement distribution:** when the solver must shift openings to satisfy panel snapping or closure constraints, it distributes the required displacement among soft openings proportional to their mobility. A high-mobility door adjacent to a low-mobility conveyor opening absorbs most of the displacement.
 
-**Desired vs. actual position:** `desired_position_mm` on a DeclaredOpening entity stores the user's intent and persists across solves. The solver attempts to honour it. When constraints force displacement, the actual solved position lives only in the edge's solve cache — it is never written back to `desired_position_mm`. When constraints relax, the solver can restore openings closer to their desired positions.
+**Desired vs. actual position:** `desired_position_mm` on a DeclaredOpening entity stores the user's intent and persists across solves. The solver attempts to honour it. When constraints force displacement, the actual solved position is written into the opening entity's `PoseComponent` by `apply()` — it is never written back to `desired_position_mm`. When constraints relax, the solver can restore openings closer to their desired positions.
 
 ---
 
-## Solve Cache
+## SolverOutput and ECS
 
-The edge's solve cache stores all derived results: the merged ordered sequence of spans and openings with actual positions, solved panel combinations per span, and span constraint annotations. It is:
+The solver returns a `SolverOutput` containing the complete solved layout: span sequences with panel combinations and SpanType decisions, opening positions, and NodeType assignments. This is a transient value — it exists to be consumed by `FactoryScene.apply()` and retained as a warm-start hint for the next solve.
 
-- Invalidated whenever the edge's declared openings change, a world feature moves, or a span constraint changes
-- Never serialised — always recomputed from entity state on load
-- The sole source of "actual position" for any element on an edge
+`apply()` translates every element of `SolverOutput` into ECS components:
+
+- Node positions and types → `PoseComponent` + `NodeComponent`
+- Edge topology, panel combinations, SpanType → `PoseComponent` + `EdgeComponent`
+- Opening actual positions → `PoseComponent` on the opening entity
+- New entity IDs assigned by the solver → new ECS entities created and registered in the ID map
+
+After `apply()`, the ECS is the single source of truth. Systems read entity components — they do not read `SolverOutput` directly. `SolverOutput` is never serialised; the ECS state is always recomputed from user-intent components on load.
 
 ---
 
 ## World Features
 
-World features exist independently of edges. When an edge line passes through a world feature's footprint, a WorldFeatureOpening is automatically generated in the solve cache. When the edge moves away from the footprint, the opening disappears.
+World features exist independently of edges. When an edge line passes through a world feature's footprint, a WorldFeatureOpening is automatically generated during the solve and written into ECS via `apply()`. When the edge moves away from the footprint, the opening disappears on the next solve.
 
 | Type | Examples | NodeType implication |
 |---|---|---|
@@ -201,7 +206,7 @@ No coupling to the solver. Produces the same entity state a user would declare m
 
 ### Layer 1 — Topology Definition
 
-The `SolverInputBuilder` has already translated entity LayoutComponents into `SolverInput` before the solver is called. Layer 1 reads from that typed structure:
+The `SolverInputBuilder` has already translated entity components into `SolverInput` before the solver is called. Layer 1 reads from that typed structure:
 
 - Node positions forming the closed polygon
 - Edge topology and catalog references
@@ -224,7 +229,7 @@ If a world feature opening leaves insufficient room for even the smallest valid 
 
 Select one combination per span such that the polygon closes exactly (sum of edge vectors = 0). For small cells: exhaustive search. For larger cells: constraint propagation or branch-and-bound.
 
-Unallocated openings are assigned to edges here. Their edge and position are free variables in the optimisation — the solver jointly minimises the objective over panel combinations, closure, and opening placement. The result is a complete assignment for every unallocated opening, stored in `CellLayout`. It is not written back to any LayoutComponent.
+Unallocated openings are assigned to edges here. Their edge and position are free variables in the optimisation — the solver jointly minimises the objective over panel combinations, closure, and opening placement. The result is a complete assignment for every unallocated opening. `apply()` writes it into the ECS — setting `parent_edge` on `DeclaredOpeningComponent` and position on `PoseComponent`. It is never written back to `desired_position_mm`.
 
 The global objective function is applied here: among all closure-consistent solutions, pick the best-scoring one.
 
@@ -244,9 +249,24 @@ The solver is parameterised by an objective function. The default is **minimum c
 | Ergonomic | Minimise awkward angles, maximise door accessibility |
 | Volume | Minimise enclosed floor area |
 | Panel count | Minimise the number of distinct panel widths |
+| Style / Theme | Customer-defined aesthetic or feel (see below) |
 | Custom | User-defined scoring function |
 
-Objective functions score a complete candidate solution. They must be **composable**: a solution can be scored as 70% cost + 30% ergonomic.
+Objective functions score a complete candidate solution. They must be **composable**: a solution can be scored as 70% cost + 30% style.
+
+### Style and Theme Objectives
+
+A style objective is a named scoring function that expresses a customer's aesthetic or thematic intent. Examples might be visual openness, material warmth, or a specific feel that the customer associates with their brand or working environment. The system does not prescribe what any named style means — the integrator or customer defines it by authoring the scoring function.
+
+Style objectives are the mechanism by which **span types are decided**. The solver does not accept user-declared span types directly. Instead, it selects the material composition of each span (which panels from the catalog to use — solid, mesh, transparent, etc.) as part of the objective-driven search. A style objective can score candidate solutions based on the ratio of transparent to solid panels, the visual rhythm of the layout, height variation, or any other property expressible from the catalog metadata and panel combination.
+
+This means:
+- Span material type is always **solver output**, never a directly placed user component.
+- `apply()` writes `SpanType` into the `EdgeComponent` — the solver's material decision alongside the panel combination.
+- The VisualUpdateSystem reads `SpanType` from the ECS and selects the matching catalog variant for the `VisualComponent`.
+- A customer's aesthetic intent is captured entirely in the objective function, not in the entity model.
+
+Style objectives are composable with structural objectives: a solution can be scored as 60% cost + 40% style.
 
 ---
 
@@ -295,5 +315,5 @@ Before adding any new solver capability, verify:
 5. Does `NodeType` selection remain a solver output, never a user input?
 6. Do new opening types subclass `Opening` rather than introducing parallel element lists?
 7. Are world features and span constraints kept independent of edges — derived at solve time, not stored on edges?
-8. Does new data on a DeclaredOpening entity distinguish user intent (`desired_position_mm`) from solver output (solve cache)?
+8. Does new data on a DeclaredOpening entity distinguish user intent (`desired_position_mm`) from solver output (written to `PoseComponent` by `apply()`)?
 9. Does any new mobility-like property default to `0.0` (immovable) as the fail-safe?

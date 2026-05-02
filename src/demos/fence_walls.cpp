@@ -28,8 +28,8 @@ int main() {
 
     // ── Scene setup ───────────────────────────────────────────────────────────
     SceneSetup ss("FenceWalls");
-    ss.scene->background = Color(0x1a1614);
-    ss.scene->fog         = Fog(Color(0x1a1614), 8.0f, 28.0f);
+    ss.scene->background = Color(0x3d2e1e);
+    ss.scene->fog         = Fog(Color(0x3d2e1e), 12.0f, 35.0f);
     ss.camera->position.set(7.0f, 5.0f, 9.0f);
     ss.camera->lookAt({0, 0.5f, 0});
     ss.controls->target = {0, 0.5f, 0};
@@ -37,37 +37,22 @@ int main() {
 
     // Warm amber key — upper right
     {
-        auto key = DirectionalLight::create(0xffd580, 1.3f);
+        auto key = DirectionalLight::create(0xffe8a0, 1.2f);
         key->position.set(6, 9, 4);
         ss.scene->add(key);
     }
     // Cool blue-purple fill — opposite side
     {
-        auto fill = DirectionalLight::create(0x7080c0, 0.35f);
+        auto fill = DirectionalLight::create(0x6080b0, 0.4f);
         fill->position.set(-5, 4, -6);
         ss.scene->add(fill);
     }
-    // Very low warm ambient — lifts shadows without washing out
-    ss.scene->add(AmbientLight::create(0x2a1f0f, 0.5f));
+    // Warm ambient — bright enough to read the whole scene comfortably
+    ss.scene->add(AmbientLight::create(0xc87840, 0.5f));
 
-    // Floor — sized from solved node positions in ECS.
+    // Floor — fixed large plane; fog hides the edge so no clipping visible.
     {
-        float min_x = 1e9f, max_x = -1e9f, min_z = 1e9f, max_z = -1e9f;
-        scene.registry().view<factory::NodeComponent,
-                               factory::PoseComponent>().each(
-            [&](entt::entity,
-                const factory::NodeComponent&,
-                const factory::PoseComponent& p)
-            {
-                min_x = std::min(min_x, p.position.x);
-                max_x = std::max(max_x, p.position.x);
-                min_z = std::min(min_z, p.position.y);
-                max_z = std::max(max_z, p.position.y);
-            });
-        // Extend floor beyond the fence to give it a stage/ground feel.
-        const float margin = 2.0f;
-        auto geo = PlaneGeometry::create((max_x - min_x) * 0.001f + margin,
-                                         (max_z - min_z) * 0.001f + margin);
+        auto geo = PlaneGeometry::create(60.0f, 60.0f);
         auto mat = MeshPhongMaterial::create();
         mat->color     = Color(0x1c1a18);
         mat->specular  = Color(0x886644);

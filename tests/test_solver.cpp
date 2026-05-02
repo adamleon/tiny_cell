@@ -153,13 +153,14 @@ TEST(spans_nonempty) {
             REQUIRE(!span.empty());
 }
 
-// Opening center position = left_span_actual + opening_width/2.
+// Opening center position = left_span_actual + post + opening_width/2.
 TEST(opening_position_at_center) {
-    auto out = solver::solve(make_rect_input(true), load_table());
+    auto tbl = load_table();
+    auto out = solver::solve(make_rect_input(true), tbl);
     const auto& edge = out.edges[0];
     const auto& op   = edge.openings[0];
     int left_actual  = visual_mm(edge.spans_mm[0]);
-    REQUIRE_EQ(op.position_mm, left_actual + op.width_mm / 2);
+    REQUIRE_EQ(op.position_mm, left_actual + tbl.post_width_mm + op.width_mm / 2);
 }
 
 // Left and right flanking spans are equal (symmetric placement).
@@ -169,11 +170,14 @@ TEST(flanking_spans_equal) {
     REQUIRE_EQ(visual_mm(spans[0]), visual_mm(spans[1]));
 }
 
-// Total visual length of edge 0 = left + opening + right = desired edge length.
+// Total visual length of edge 0 = left + post + opening + post + right = desired edge length.
 TEST(edge_with_opening_visual_length_correct) {
-    auto out   = solver::solve(make_rect_input(true), load_table());
+    auto tbl = load_table();
+    auto out = solver::solve(make_rect_input(true), tbl);
     const auto& edge = out.edges[0];
-    int total = visual_mm(edge.spans_mm[0]) + edge.openings[0].width_mm + visual_mm(edge.spans_mm[1]);
+    int total = visual_mm(edge.spans_mm[0])
+              + tbl.post_width_mm + edge.openings[0].width_mm + tbl.post_width_mm
+              + visual_mm(edge.spans_mm[1]);
     REQUIRE_EQ(total, 4000);
 }
 

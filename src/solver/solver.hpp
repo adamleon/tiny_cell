@@ -61,7 +61,8 @@ inline SolverOutput solve(const SolverInput& input, const LookupTable& table) {
             // Split remaining length into two equal flanking spans.
             const auto& op_spec = input.unallocated_openings[0];
             const int   op_w    = op_spec.width_mm;
-            const int   half    = (desired - op_w) / 2;
+            const int   post_w  = table.post_width_mm;
+            const int   half    = (desired - op_w - 2 * post_w) / 2;
 
             auto left  = ::solve(table, half, /*prefer_over=*/true);
             auto right = ::solve(table, half, /*prefer_over=*/true);
@@ -69,7 +70,7 @@ inline SolverOutput solve(const SolverInput& input, const LookupTable& table) {
             OpeningOut op;
             op.entity_id   = assign(op_spec.entity_id);
             op.edge_id     = edge.entity_id;
-            op.position_mm = left.actual_mm + op_w / 2;
+            op.position_mm = left.actual_mm + post_w + op_w / 2;
             op.width_mm    = op_w;
 
             edge.spans_mm = {left.panels_mm, right.panels_mm};

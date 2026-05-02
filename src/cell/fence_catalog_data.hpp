@@ -23,4 +23,8 @@ inline int catalogEdgeHeight(const nlohmann::json& catalog) {
     return catalog.at("post").at("height_mm").get<int>();
 }
 
+inline int catalogPostWidth(const nlohmann::json& catalog) {
+    return catalog.at("post").at("width_mm").get<int>();
+}
+
 } // namespace cell

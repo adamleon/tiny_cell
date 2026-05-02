@@ -64,8 +64,8 @@ inline CatalogProtos loadCatalogProtos(
 
     auto panelMat = MeshPhongMaterial::create();
     panelMat->color     = Color(0xa8a8a8);
-    panelMat->specular  = Color(0x998866);
-    panelMat->shininess = 60;
+    panelMat->specular  = Color(0x888888);
+    panelMat->shininess = 50;
     for (const auto& p : catalog["panels"]) {
         int w = p["width_mm"].get<int>();
         protos.panels[w] = buildComponentProto(
@@ -74,8 +74,8 @@ inline CatalogProtos loadCatalogProtos(
 
     auto postMat = MeshPhongMaterial::create();
     postMat->color     = Color(0x707070);
-    postMat->specular  = Color(0x775544);
-    postMat->shininess = 80;
+    postMat->specular  = Color(0x707070);
+    postMat->shininess = 70;
     const auto& post = catalog["post"];
     protos.post = buildComponentProto(
         loader, dir + "/" + post["filename"].get<std::string>(), post, postMat);

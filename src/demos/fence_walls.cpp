@@ -28,35 +28,36 @@ int main() {
 
     // ── Scene setup ───────────────────────────────────────────────────────────
     SceneSetup ss("FenceWalls");
-    ss.scene->background = Color(0x3d2e1e);
-    ss.scene->fog         = Fog(Color(0x3d2e1e), 12.0f, 35.0f);
+    ss.scene->background = Color(0xede8e2);
+    ss.scene->fog         = Fog(Color(0xede8e2), 14.0f, 38.0f);
     ss.camera->position.set(7.0f, 5.0f, 9.0f);
     ss.camera->lookAt({0, 0.5f, 0});
     ss.controls->target = {0, 0.5f, 0};
+    ss.controls->maxPolarAngle = math::PI / 2.0f - 0.05f;
     ss.controls->update();
 
-    // Warm amber key — upper right
+    // Soft warm-white key — slightly above horizontal, from the right
     {
-        auto key = DirectionalLight::create(0xffe8a0, 1.2f);
+        auto key = DirectionalLight::create(0xfff5ec, 0.9f);
         key->position.set(6, 9, 4);
         ss.scene->add(key);
     }
-    // Cool blue-purple fill — opposite side
+    // Cool blue-white fill — opposite side, keeps shadows from going muddy
     {
-        auto fill = DirectionalLight::create(0x6080b0, 0.4f);
+        auto fill = DirectionalLight::create(0xd0e4f8, 0.5f);
         fill->position.set(-5, 4, -6);
         ss.scene->add(fill);
     }
-    // Warm ambient — bright enough to read the whole scene comfortably
-    ss.scene->add(AmbientLight::create(0xc87840, 0.5f));
+    // Bright near-white ambient — the main brightness driver
+    ss.scene->add(AmbientLight::create(0xfff8f0, 0.7f));
 
     // Floor — fixed large plane; fog hides the edge so no clipping visible.
     {
         auto geo = PlaneGeometry::create(60.0f, 60.0f);
         auto mat = MeshPhongMaterial::create();
-        mat->color     = Color(0x1c1a18);
-        mat->specular  = Color(0x886644);
-        mat->shininess = 70;
+        mat->color     = Color(0x2a2824);
+        mat->specular  = Color(0x605850);
+        mat->shininess = 60;
         auto floor = Mesh::create(geo, mat);
         floor->rotation.x = -math::PI / 2.f;
         ss.scene->add(floor);

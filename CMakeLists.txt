@@ -33,7 +33,7 @@ FetchContent_MakeAvailable(glm)
 # ── Demo helper ───────────────────────────────────────────────────────────────
 function(add_demo name)
     add_executable(${name} src/demos/${name}.cpp)
-    target_link_libraries(${name} PRIVATE threepp::threepp)
+    target_link_libraries(${name} PRIVATE threepp::threepp EnTT::EnTT glm::glm)
     target_include_directories(${name} PRIVATE
         src
         ${threepp_SOURCE_DIR}/src/external/nlohmann

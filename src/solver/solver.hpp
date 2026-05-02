@@ -17,7 +17,12 @@
 namespace solver {
 
 inline SolverOutput solve(const SolverInput& input, const LookupTable& table) {
-    EntityId next_id = 2;  // 1 is reserved for the scene/world entity (kSceneEntityId)
+    // Start past all pre-assigned IDs so solver-created edges don't collide with user nodes.
+    EntityId next_id = 2;
+    for (const auto& n : input.nodes)
+        if (n.entity_id < kNewEntity) next_id = std::max(next_id, n.entity_id + 1);
+    for (const auto& op : input.unallocated_openings)
+        if (op.entity_id < kNewEntity) next_id = std::max(next_id, op.entity_id + 1);
     auto assign = [&](EntityId id) -> EntityId {
         return (id == kNewEntity) ? next_id++ : id;
     };

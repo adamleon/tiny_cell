@@ -24,6 +24,8 @@ class FactoryScene {
     entt::registry                                     registry_;
     std::unordered_map<solver::EntityId, entt::entity> id_map_;
     solver::SolverOutput                               current_layout_;
+    solver::EntityId                                   next_id_ = 2;  // 1 reserved for scene entity
+    std::vector<solver::EntityId>                      node_order_;   // polygon vertex order
 
     entt::entity get_or_create(solver::EntityId id) {
         auto [it, inserted] = id_map_.emplace(id, entt::null);
@@ -38,6 +40,53 @@ public:
         id_map_.emplace(kSceneEntityId, scene_ent);
         auto& pose      = registry_.emplace<PoseComponent>(scene_ent);
         pose.parent     = scene_ent;
+    }
+
+    // Place a corner node on the factory floor (Z-up, mm).
+    // Nodes are recorded in insertion order — that order defines the polygon for the solver.
+    entt::entity place_node(float x_mm, float z_mm) {
+        auto id = next_id_++;
+        node_order_.push_back(id);
+        auto e        = get_or_create(id);
+        auto& pose    = registry_.emplace_or_replace<PoseComponent>(e);
+        pose.position = Vec3{x_mm, z_mm, 0.f};
+        pose.parent   = id_map_.at(kSceneEntityId);
+        registry_.emplace_or_replace<NodeComponent>(e);
+        return e;
+    }
+
+    // Declare an unallocated opening (slab, door, pass-through).
+    // The solver assigns it to an edge and position.
+    entt::entity declare_opening(int width_mm) {
+        auto id    = next_id_++;
+        auto e     = get_or_create(id);
+        auto& oc   = registry_.emplace_or_replace<DeclaredOpeningComponent>(e);
+        oc.width_mm = width_mm;
+        // parent_edge stays entt::null — unallocated
+        return e;
+    }
+
+    // Translate ECS state → SolverInput → solve → apply() back into ECS.
+    void solve(const LookupTable& table, const std::string& catalog_path) {
+        solver::SolverInput in;
+        in.catalog_path = catalog_path;
+
+        for (auto sid : node_order_) {
+            const auto& pose = registry_.get<PoseComponent>(id_map_.at(sid));
+            in.nodes.push_back({sid, pose.position.x, pose.position.y});
+        }
+        for (const auto& [sid, e] : id_map_) {
+            if (sid == kSceneEntityId) continue;
+            if (const auto* oc = registry_.try_get<DeclaredOpeningComponent>(e))
+                if (oc->parent_edge == entt::null)
+                    in.unallocated_openings.push_back({sid, oc->width_mm});
+        }
+
+        apply(solver::solve(in, table));
+
+        // Sync next_id_ past all IDs now in the map (including solver-assigned edge IDs).
+        for (const auto& [id, _] : id_map_)
+            if (id < solver::kNewEntity) next_id_ = std::max(next_id_, id + 1);
     }
 
     // Apply a solver output: populate/update components from every element.

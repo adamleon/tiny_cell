@@ -1,20 +1,12 @@
+#include <algorithm>
+
 #include "common/scene_setup.hpp"
-#include "cell/cell_layout.hpp"
-#include "cell/cell_builder.hpp"
 #include "cell/fence_catalog.hpp"
 #include "cell/fence_solver.hpp"
-
-#include <cassert>
-#include <iostream>
+#include "factory_scene/factory_scene.hpp"
+#include "factory_scene/render_system.hpp"
 
 using namespace threepp;
-
-constexpr int  kNorthSouthMm = 4000;
-constexpr int  kEastWestMm   = 3000;
-constexpr bool kPreferOver   = true;
-
-// Width of the dummy slab opening placed on the south edge.
-constexpr int kSlabWidthMm = 500;
 
 int main() {
     const std::string assetDir = "assets/components/fences/axelent_x-guard";
@@ -22,53 +14,18 @@ int main() {
     auto catalog = cell::loadCatalog(assetDir + "/catalog.json");
     auto table   = loadTable(assetDir + "/combinations.json");
 
-    // Standard edges (no opening)
-    auto ns = solve(table, kNorthSouthMm, kPreferOver);
-    auto ew = solve(table, kEastWestMm,   kPreferOver);
+    // Declare layout intent: 4 corner nodes (mm, Z-up) + one unallocated slab.
+    // The solver assigns the slab to edge 0 (south) and chooses panel combinations.
+    factory::FactoryScene scene;
+    scene.place_node(-2000.f, -1500.f);  // SW
+    scene.place_node( 2000.f, -1500.f);  // SE
+    scene.place_node( 2000.f,  1500.f);  // NE
+    scene.place_node(-2000.f,  1500.f);  // NW
+    scene.declare_opening(500);          // slab — solver picks edge + position
 
-    // South edge: two spans flanking a slab opening.
-    // Each span is solved for half of (ns.actual_mm - slab_width).
-    // This works exactly when ns.actual_mm is even and the half is in the table.
-    // The full solver (Layer 3) will handle general closure.
-    int remaining_mm = ns.actual_mm - kSlabWidthMm;
-    auto south_a = solve(table, remaining_mm / 2, kPreferOver);
-    auto south_b = solve(table, remaining_mm / 2, kPreferOver);
+    scene.solve(table, assetDir);
 
-    int south_visual_mm = south_a.actual_mm + kSlabWidthMm + south_b.actual_mm;
-
-    std::cout << "N wall: " << ns.actual_mm     << " mm (" << ns.panels_mm.size()     << " panels)\n";
-    std::cout << "S wall: " << south_visual_mm  << " mm (slab + 2 spans)\n";
-    std::cout << "E/W:    " << ew.actual_mm     << " mm (" << ew.panels_mm.size()     << " panels)\n";
-
-    // Node positions derived from solved visual lengths so corners close.
-    // South and north share the same width (south_visual_mm == ns.actual_mm when
-    // the half-span solve is exact; assert guards the demo assumption).
-    assert(south_visual_mm == ns.actual_mm &&
-           "Demo assumption: south spans + slab must equal north span exactly. "
-           "Adjust kNorthSouthMm or kSlabWidthMm if this fires.");
-
-    float hw = ns.actual_mm  * 0.0005f;
-    float hd = ew.actual_mm  * 0.0005f;
-
-    cell::CellLayout layout;
-    int sw = layout.addNode(-hw, -hd);
-    int se = layout.addNode(+hw, -hd);
-    int ne = layout.addNode(+hw, +hd);
-    int nw = layout.addNode(-hw, +hd);
-
-    // South edge: two spans + one slab opening in the middle.
-    // The slab's desired_position is the centre of the edge in mm from the west end.
-    int slab_pos_mm = south_a.actual_mm + kSlabWidthMm / 2;
-    auto slab = std::make_shared<cell::DeclaredOpening>(slab_pos_mm, kSlabWidthMm);
-    layout.addEdge(sw, se,
-        {south_a.panels_mm, south_b.panels_mm},
-        {slab});
-
-    layout.addEdge(se, ne, ew.panels_mm);   // east  — no opening
-    layout.addEdge(ne, nw, ns.panels_mm);   // north — no opening
-    layout.addEdge(nw, sw, ew.panels_mm);   // west  — no opening
-
-    // ── Scene ─────────────────────────────────────────────────────────────────
+    // ── Scene setup ───────────────────────────────────────────────────────────
     SceneSetup ss("FenceWalls");
     ss.scene->background = Color(0x1a1f2e);
     ss.camera->position.set(7.0f, 5.0f, 9.0f);
@@ -83,19 +40,32 @@ int main() {
         ss.scene->add(sun);
     }
 
-    // Floor
+    // Floor — sized from solved node positions in ECS.
     {
-        auto geo = PlaneGeometry::create(ns.actual_mm * 0.001f, ew.actual_mm * 0.001f);
+        float min_x = 1e9f, max_x = -1e9f, min_z = 1e9f, max_z = -1e9f;
+        scene.registry().view<factory::NodeComponent,
+                               factory::PoseComponent>().each(
+            [&](entt::entity,
+                const factory::NodeComponent&,
+                const factory::PoseComponent& p)
+            {
+                min_x = std::min(min_x, p.position.x);
+                max_x = std::max(max_x, p.position.x);
+                min_z = std::min(min_z, p.position.y);
+                max_z = std::max(max_z, p.position.y);
+            });
+        auto geo = PlaneGeometry::create((max_x - min_x) * 0.001f,
+                                         (max_z - min_z) * 0.001f);
         auto mat = MeshPhongMaterial::create();
         mat->color = Color(0x2a2a2a);
         auto floor = Mesh::create(geo, mat);
-        floor->rotation.x = -math::PI / 2.0f;
+        floor->rotation.x = -math::PI / 2.f;
         ss.scene->add(floor);
     }
 
     OBJLoader loader;
     auto protos = cell::loadCatalogProtos(loader, assetDir, catalog);
-    ss.scene->add(cell::buildCell(layout, protos));
+    ss.scene->add(render::buildScene(scene, protos));
 
     ss.canvas.animate([&] {
         ss.renderer.render(*ss.scene, *ss.camera);

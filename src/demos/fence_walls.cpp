@@ -1,5 +1,6 @@
 #include <algorithm>
 
+#include <threepp/cameras/OrthographicCamera.hpp>
 #include <threepp/scenes/Fog.hpp>
 #include "common/scene_setup.hpp"
 #include "cell/fence_catalog.hpp"
@@ -29,43 +30,61 @@ int main() {
     // ── Scene setup ───────────────────────────────────────────────────────────
     SceneSetup ss("FenceWalls");
     ss.scene->background = Color(0xede8e2);
-    ss.scene->fog         = Fog(Color(0xede8e2), 14.0f, 38.0f);
+    ss.scene->fog         = Fog(Color(0xede8e2), 12.0f, 22.0f);
     ss.camera->position.set(7.0f, 5.0f, 9.0f);
     ss.camera->lookAt({0, 0.5f, 0});
     ss.controls->target = {0, 0.5f, 0};
     ss.controls->maxPolarAngle = math::PI / 2.0f - 0.05f;
     ss.controls->update();
 
-    // Soft warm-white key — slightly above horizontal, from the right
+    ss.renderer.shadowMap().enabled = true;
+
+    // Soft warm-white key — casts shadows
     {
         auto key = DirectionalLight::create(0xfff5ec, 0.9f);
         key->position.set(6, 9, 4);
+        key->castShadow = true;
+        key->shadow->mapSize = {2048, 2048};
+        key->shadow->bias    = -0.002f;
+        // Expand shadow frustum to cover the full cell + surrounding floor.
+        auto* cam = dynamic_cast<OrthographicCamera*>(key->shadow->camera.get());
+        if (cam) {
+            cam->left = -8; cam->right  =  8;
+            cam->top  =  8; cam->bottom = -8;
+            cam->updateProjectionMatrix();
+        }
         ss.scene->add(key);
     }
-    // Cool blue-white fill — opposite side, keeps shadows from going muddy
+    // Cool blue-white fill — no shadows, just lifts the dark side
     {
         auto fill = DirectionalLight::create(0xd0e4f8, 0.5f);
         fill->position.set(-5, 4, -6);
         ss.scene->add(fill);
     }
-    // Bright near-white ambient — the main brightness driver
+    // Bright near-white ambient
     ss.scene->add(AmbientLight::create(0xfff8f0, 0.7f));
 
-    // Floor — fixed large plane; fog hides the edge so no clipping visible.
+    // Floor — fixed large plane; fog dissolves the edge.
     {
         auto geo = PlaneGeometry::create(60.0f, 60.0f);
         auto mat = MeshPhongMaterial::create();
-        mat->color     = Color(0x2a2824);
-        mat->specular  = Color(0x605850);
-        mat->shininess = 60;
+        mat->color     = Color(0x8c8278);
+        mat->specular  = Color(0xb0a898);
+        mat->shininess = 55;
         auto floor = Mesh::create(geo, mat);
-        floor->rotation.x = -math::PI / 2.f;
+        floor->rotation.x  = -math::PI / 2.f;
+        floor->receiveShadow = true;
         ss.scene->add(floor);
     }
 
     OBJLoader loader;
-    auto protos = cell::loadCatalogProtos(loader, assetDir, catalog);
-    ss.scene->add(render::buildScene(scene, protos));
+    auto protos   = cell::loadCatalogProtos(loader, assetDir, catalog);
+    auto fenceGrp = render::buildScene(scene, protos);
+    fenceGrp->traverse([](Object3D& obj) {
+        obj.castShadow    = true;
+        obj.receiveShadow = true;
+    });
+    ss.scene->add(fenceGrp);
 
     ss.canvas.animate([&] {
         ss.renderer.render(*ss.scene, *ss.camera);

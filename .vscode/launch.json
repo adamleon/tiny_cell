@@ -5,7 +5,7 @@
             "name": "fence_walls (Windows)",
             "type": "cppvsdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/build/Release/fence_walls.exe",
+            "program": "${workspaceFolder}/build/fence_walls.exe",
             "args": [],
             "cwd": "${workspaceFolder}",
             "preLaunchTask": "cmake build"
@@ -31,7 +31,7 @@
             "name": "GenLookup (Windows)",
             "type": "cppvsdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/build/Release/GenLookup.exe",
+            "program": "${workspaceFolder}/build/GenLookup.exe",
             "args": [],
             "cwd": "${workspaceFolder}",
             "preLaunchTask": "cmake build"

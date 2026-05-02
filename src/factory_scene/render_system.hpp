@@ -61,10 +61,10 @@ inline std::shared_ptr<threepp::Object3D> buildScene(
             std::sort(ops.begin(), ops.end(),
                       [](const OpInfo& a, const OpInfo& b) { return a.local_x < b.local_x; });
 
-            // Total visual width (mm): all spans + all openings.
+            // Total visual width (mm): spans + openings + 2 boundary posts per opening.
             int total_mm = 0;
             for (const auto& s : ec.spans_mm) total_mm += detail::spanVisualMm(s);
-            for (const auto& op : ops) total_mm += op.width_mm;
+            for (const auto& op : ops) total_mm += op.width_mm + 100;  // +50mm post each side
 
             float cursor = -total_mm * 0.0005f;  // start at -half_m in edge-local X
             auto grp = Group::create();
@@ -87,8 +87,17 @@ inline std::shared_ptr<threepp::Object3D> buildScene(
                         cursor += 0.05f;
                     }
                 }
-                // Opening between span[i] and span[i+1].
+                // Post + opening + post between span[i] and span[i+1].
                 if (i < static_cast<int>(ops.size())) {
+                    auto add_post = [&] {
+                        auto post = protos.post->clone();
+                        post->position.set(cursor + 0.025f, 0.f, 0.f);
+                        grp->add(post);
+                        cursor += 0.05f;
+                    };
+
+                    add_post();  // post on the left side of the opening
+
                     float ow_m = ops[i].width_mm * 0.001f;
                     float oh_m = protos.edge_height_mm * 0.001f;
                     auto geo   = BoxGeometry::create(ow_m, oh_m, 0.05f);
@@ -100,6 +109,8 @@ inline std::shared_ptr<threepp::Object3D> buildScene(
                     box->position.set(cursor + ow_m * 0.5f, oh_m * 0.5f, 0.f);
                     grp->add(box);
                     cursor += ow_m;
+
+                    add_post();  // post on the right side of the opening
                 }
             }
 

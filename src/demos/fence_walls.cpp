@@ -45,12 +45,14 @@ int main() {
         key->position.set(6, 9, 4);
         key->castShadow = true;
         key->shadow->mapSize = {2048, 2048};
-        key->shadow->bias    = -0.002f;
-        // Expand shadow frustum to cover the full cell + surrounding floor.
+        key->shadow->bias    = -0.0005f;
+        // Tight frustum: covers the cell + a little floor; near/far kept small
+        // so bias stays in mm range (bias is in depth-space: offset ≈ bias × far).
         auto* cam = dynamic_cast<OrthographicCamera*>(key->shadow->camera.get());
         if (cam) {
-            cam->left = -8; cam->right  =  8;
-            cam->top  =  8; cam->bottom = -8;
+            cam->left      = -8;   cam->right    =  8;
+            cam->top       =  8;   cam->bottom   = -8;
+            cam->nearPlane = 1.0f; cam->farPlane = 25.0f;
             cam->updateProjectionMatrix();
         }
         ss.scene->add(key);

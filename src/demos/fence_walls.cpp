@@ -1,5 +1,6 @@
 #include <algorithm>
 
+#include <threepp/lights/RectAreaLight.hpp>
 #include <threepp/materials/MeshStandardMaterial.hpp>
 #include <threepp/renderers/wgpu/WgpuPathTracer.hpp>
 #include "common/scene_setup.hpp"
@@ -27,35 +28,49 @@ int main() {
 
     // ── Scene setup ───────────────────────────────────────────────────────────
     SceneSetup ss("FenceWalls");
-    ss.scene->background = Color(0xfff8f0);  // warm cream sky — doubles as path tracer env
+    ss.scene->background = Color(0x080604);  // near-black warm void
     ss.camera->position.set(7.0f, 5.0f, 9.0f);
     ss.camera->lookAt({0, 0.5f, 0});
     ss.controls->target = {0, 0.5f, 0};
     ss.controls->maxPolarAngle = math::PI / 2.0f - 0.05f;
     ss.controls->update();
 
-    // Path tracer — handles transparent shadows physically.
+    // Path tracer — handles transparent shadows + RectAreaLight physically.
     ss.renderer.usePathTracer = true;
     auto& pt = ss.renderer.pathTracer();
     pt.setReSTIREnabled(true);
     pt.setMaxBounces(4);
-    pt.setExposure(1.3f);
+    pt.setExposure(1.1f);
 
-    // Warm sun from upper-right.
+    // Overhead fixture strips — warm sunrise orange, aimed downward.
+    // Three parallel rows above the cell; RectAreaLight auto-creates its own
+    // emissive quad mesh, so the physical tubes are visible in reflections.
     {
-        auto key = DirectionalLight::create(0xffe8c8, 2.0f);
-        key->position.set(6, 9, 4);
-        key->castShadow = true;
-        ss.scene->add(key);
-    }
-    ss.scene->add(AmbientLight::create(0xfff8f0, 1.5f));
+        const Color  fixtureColor(0xffa060);
+        const float  fixtureIntensity = 18.0f;
+        const float  fixtureLength    = 3.2f;  // slightly overhangs the ±1.5m cell depth
+        const float  fixtureWidth     = 0.12f;
+        const float  fixtureY         = 3.0f;
+        const float  zPositions[]     = { -0.9f, 0.0f, 0.9f };
 
-    // Floor — warm light concrete, slightly polished.
+        for (float z : zPositions) {
+            auto fix = RectAreaLight::create(fixtureColor, fixtureIntensity,
+                                             fixtureLength, fixtureWidth);
+            fix->rotation.x = -math::PI / 2.0f;  // face downward
+            fix->position.set(0.0f, fixtureY, z);
+            ss.scene->add(fix);
+        }
+    }
+
+    // Dim warm fill so the void isn't absolute black.
+    ss.scene->add(AmbientLight::create(Color(0x3a2010), 0.25f));
+
+    // Floor — polished epoxy: low roughness so fixtures show as strips.
     {
         auto geo = PlaneGeometry::create(60.0f, 60.0f);
         auto mat = MeshStandardMaterial::create();
-        mat->color     = Color(0xd0c4b0);
-        mat->roughness = 0.25f;
+        mat->color     = Color(0xd0c8b8);
+        mat->roughness = 0.12f;
         mat->metalness = 0.0f;
         auto floor = Mesh::create(geo, mat);
         floor->rotation.x    = -math::PI / 2.f;
@@ -63,8 +78,7 @@ int main() {
         ss.scene->add(floor);
     }
 
-    // Fence — all objects cast + receive shadows; path tracer handles
-    // transmission correctly so the opening no longer needs special casing.
+    // Fence — path tracer handles transmission on the opening indicator.
     OBJLoader loader;
     auto protos   = cell::loadCatalogProtos(loader, assetDir, catalog);
     auto fenceGrp = render::buildScene(scene, protos);
@@ -75,8 +89,9 @@ int main() {
     ss.scene->add(fenceGrp);
 
     ss.canvas.animate([&] {
-        ss.scene->fog = FogExp2(Color(0xfff5e8), 0.04f);
-        pt.setFogAnisotropy(0.2f);
+        // FogExp2 must be set each frame for the path tracer to pick it up.
+        ss.scene->fog = FogExp2(Color(0x080604), 0.07f);
+        pt.setFogAnisotropy(0.0f);
         ss.renderer.render(*ss.scene, *ss.camera);
     });
 

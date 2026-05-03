@@ -74,7 +74,9 @@ int main() {
     auto protos   = cell::loadCatalogProtos(loader, assetDir, catalog);
     auto fenceGrp = render::buildScene(scene, protos);
     fenceGrp->traverse([](Object3D& obj) {
-        obj.castShadow    = true;
+        if (auto* mesh = dynamic_cast<Mesh*>(&obj)) {
+            obj.castShadow = !mesh->material()->transparent;
+        }
         obj.receiveShadow = true;
     });
     ss.scene->add(fenceGrp);

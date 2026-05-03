@@ -5,17 +5,16 @@
 
 #include <entt/entt.hpp>
 #include <threepp/geometries/BoxGeometry.hpp>
+#include <threepp/geometries/PlaneGeometry.hpp>
 #include <threepp/materials/MeshPhysicalMaterial.hpp>
+#include <threepp/materials/MeshStandardMaterial.hpp>
 #include <threepp/objects/Group.hpp>
 #include <threepp/objects/Mesh.hpp>
+#include <threepp/textures/DataTexture.hpp>
 
 #include "factory_scene.hpp"
 #include "cell/fence_catalog.hpp"
 
-// Temporary combined VisualUpdateSystem + RenderSystem.
-// Will split once VisualComponent is introduced: VisualUpdateSystem writes asset keys,
-// RenderSystem reads VisualComponent + PoseComponent only.
-//
 // Coordinate conversion: ECS is Z-up (pos.x = world X, pos.y = world Z floor, pos.z = height).
 // threepp is Y-up: threepp(x, y, z) = ECS(pos.x, pos.z, pos.y) in metres.
 
@@ -30,6 +29,28 @@ inline int spanVisualMm(const std::vector<int>& span) {
     return total;
 }
 
+// 64×64 RGBA DataTexture with 45° yellow/black hazard stripes.
+inline std::shared_ptr<threepp::DataTexture> makeHazardTexture() {
+    using namespace threepp;
+    constexpr int W = 64, H = 64;
+    std::vector<unsigned char> px(W * H * 4);
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            bool yellow = (((x + y) / 8) % 2) == 0;
+            int i = (y * W + x) * 4;
+            px[i+0] = yellow ? 240 : 25;
+            px[i+1] = yellow ? 180 : 25;
+            px[i+2] = yellow ?   0 : 25;
+            px[i+3] = 255;
+        }
+    }
+    auto tex = DataTexture::create(ImageData(std::move(px)), W, H);
+    tex->wrapS = TextureWrapping::Repeat;
+    tex->wrapT = TextureWrapping::Repeat;
+    tex->needsUpdate();
+    return tex;
+}
+
 }  // namespace detail
 
 inline std::shared_ptr<threepp::Object3D> buildScene(
@@ -39,6 +60,8 @@ inline std::shared_ptr<threepp::Object3D> buildScene(
     using namespace threepp;
     const auto& reg = scene.registry();
     auto root = Group::create();
+
+    auto hazardTex = detail::makeHazardTexture();
 
     // ── Edges ─────────────────────────────────────────────────────────────────
     reg.view<factory::EdgeComponent, factory::PoseComponent>().each(
@@ -61,19 +84,17 @@ inline std::shared_ptr<threepp::Object3D> buildScene(
             std::sort(ops.begin(), ops.end(),
                       [](const OpInfo& a, const OpInfo& b) { return a.local_x < b.local_x; });
 
-            // Total visual width (mm): spans + openings + 2 boundary posts per opening.
             const float pw_m = protos.post_width_mm * 0.001f;
             const float hw_m = pw_m * 0.5f;
             int total_mm = 0;
             for (const auto& s : ec.spans_mm) total_mm += detail::spanVisualMm(s);
             for (const auto& op : ops) total_mm += op.width_mm + 2 * protos.post_width_mm;
 
-            float cursor = -total_mm * 0.0005f;  // start at -half_m in edge-local X
+            float cursor = -total_mm * 0.0005f;
             auto grp = Group::create();
 
             const int n_spans = static_cast<int>(ec.spans_mm.size());
             for (int i = 0; i < n_spans; ++i) {
-                // Panels + inter-panel posts for span[i].
                 const auto& span = ec.spans_mm[i];
                 const int   np   = static_cast<int>(span.size());
                 for (int j = 0; j < np; ++j) {
@@ -89,7 +110,6 @@ inline std::shared_ptr<threepp::Object3D> buildScene(
                         cursor += pw_m;
                     }
                 }
-                // Post + opening + post between span[i] and span[i+1].
                 if (i < static_cast<int>(ops.size())) {
                     auto add_post = [&] {
                         auto post = protos.post->clone();
@@ -98,7 +118,7 @@ inline std::shared_ptr<threepp::Object3D> buildScene(
                         cursor += pw_m;
                     };
 
-                    add_post();  // post on the left side of the opening
+                    add_post();
 
                     float ow_m = ops[i].width_mm * 0.001f;
                     float oh_m = protos.edge_height_mm * 0.001f;
@@ -114,12 +134,30 @@ inline std::shared_ptr<threepp::Object3D> buildScene(
                     grp->add(box);
                     cursor += ow_m;
 
-                    add_post();  // post on the right side of the opening
+                    add_post();
                 }
             }
 
-            // Position: Z-up ECS → Y-up threepp (swap .y and .z, scale mm → m).
-            // Recompute yaw from node poses — cleaner than extracting from quaternion.
+            // ── Hazard strip along this edge ──────────────────────────────────
+            // Flat plane lying on the floor, spanning the full visual width of
+            // the edge. UV repeat tiles the texture at ~300mm per stripe pitch.
+            {
+                const float stripWidth = 0.4f;
+                const float edgeLen    = total_mm * 0.001f;
+                const float pitch      = 0.3f;  // world metres per texture tile
+                auto geo = PlaneGeometry::create(edgeLen, stripWidth);
+                auto mat = MeshStandardMaterial::create();
+                mat->map = hazardTex;
+                mat->map->repeat.set(edgeLen / pitch, stripWidth / pitch);
+                mat->roughness = 0.6f;
+                mat->metalness = 0.0f;
+                auto strip = Mesh::create(geo, mat);
+                strip->rotation.x = -math::PI / 2.0f;
+                strip->position.set(0.0f, 0.002f, 0.0f);  // just above floor
+                strip->receiveShadow = true;
+                grp->add(strip);
+            }
+
             const auto& pa  = reg.get<factory::PoseComponent>(ec.node_a);
             const auto& pb  = reg.get<factory::PoseComponent>(ec.node_b);
             float yaw = std::atan2(pb.position.y - pa.position.y,

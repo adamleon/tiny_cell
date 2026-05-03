@@ -1,7 +1,7 @@
 #include <algorithm>
 
+#include <threepp/cameras/OrthographicCamera.hpp>
 #include <threepp/materials/MeshStandardMaterial.hpp>
-#include <threepp/renderers/wgpu/WgpuPathTracer.hpp>
 #include "common/scene_setup.hpp"
 #include "cell/fence_catalog.hpp"
 #include "cell/fence_solver.hpp"
@@ -34,23 +34,29 @@ int main() {
     ss.controls->maxPolarAngle = math::PI / 2.0f - 0.05f;
     ss.controls->update();
 
-    ss.renderer.usePathTracer = true;
-    auto& pt = ss.renderer.pathTracer();
-    pt.setReSTIREnabled(true);
-    pt.setMaxBounces(4);
-    pt.setExposure(1.2f);
+    // Raster mode — fast, fully interactive.
+    ss.renderer.usePathTracer = false;
+    ss.renderer.shadowMap().enabled = true;
 
-    // Warm directional key — sunrise angle from camera-right, slightly front.
+    // Warm directional key — sunrise from camera-right.
     {
-        auto sun = DirectionalLight::create(Color(0xffc87a), 2.5f);
+        auto sun = DirectionalLight::create(Color(0xffc87a), 2.0f);
         sun->position.set(-5, 8, 4);
         sun->castShadow = true;
+        sun->shadow->mapSize = {2048, 2048};
+        sun->shadow->bias    = -0.0005f;
+        auto* cam = dynamic_cast<OrthographicCamera*>(sun->shadow->camera.get());
+        if (cam) {
+            cam->left = -6;  cam->right  =  6;
+            cam->top  =  6;  cam->bottom = -6;
+            cam->nearPlane = 1.0f; cam->farPlane = 20.0f;
+            cam->updateProjectionMatrix();
+        }
         ss.scene->add(sun);
     }
-    // Soft fill so shadows aren't pitch black.
     ss.scene->add(AmbientLight::create(Color(0xfff0e0), 1.2f));
 
-    // Floor — warm concrete, moderate polish.
+    // Floor — warm polished concrete.
     {
         auto geo = PlaneGeometry::create(60.0f, 60.0f);
         auto mat = MeshStandardMaterial::create();
@@ -63,7 +69,7 @@ int main() {
         ss.scene->add(floor);
     }
 
-    // Fence — path tracer handles transmission on the opening indicator.
+    // Fence + hazard strips.
     OBJLoader loader;
     auto protos   = cell::loadCatalogProtos(loader, assetDir, catalog);
     auto fenceGrp = render::buildScene(scene, protos);

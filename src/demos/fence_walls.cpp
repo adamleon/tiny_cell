@@ -2,8 +2,8 @@
 
 #include <threepp/cameras/OrthographicCamera.hpp>
 #include <threepp/geometries/BoxGeometry.hpp>
-#include <threepp/lights/PointLight.hpp>
 #include <threepp/scenes/Fog.hpp>
+#include <threepp/textures/DataTexture.hpp>
 #include "common/scene_setup.hpp"
 #include "cell/fence_catalog.hpp"
 #include "cell/fence_solver.hpp"
@@ -12,6 +12,29 @@
 
 using namespace threepp;
 
+// Build a 1×64 RGBA specularMap with two stripe bands that tile to match
+// the fluorescent tube positions (Z=±0.6 m on a 60 m floor tiled 30×).
+static std::shared_ptr<DataTexture> makeStripeSpecMap() {
+    const int W = 1, H = 64;
+    std::vector<unsigned char> px(W * H * 4, 0);
+    auto white = [&](int row) {
+        px[row * 4 + 0] = px[row * 4 + 1] = px[row * 4 + 2] = px[row * 4 + 3] = 255;
+    };
+    // Two bands per 2 m tile (tile repeats 30× on 60 m floor):
+    //   Z=+0.6 m  →  tile-UV 0.70  →  row 45 (±3 rows = 0.19 m wide)
+    //   Z=-0.6 m  →  tile-UV 0.30  →  row 19 (±3 rows)
+    for (int r = 16; r <= 22; ++r) white(r);
+    for (int r = 42; r <= 48; ++r) white(r);
+
+    auto tex = DataTexture::create(std::vector<unsigned char>(px), W, H);
+    tex->wrapS  = TextureWrapping::Repeat;
+    tex->wrapT  = TextureWrapping::Repeat;
+    tex->repeat.set(1.0f, 30.0f);
+    tex->magFilter = Filter::Linear;
+    tex->minFilter = Filter::Linear;
+    return tex;
+}
+
 int main() {
     const std::string assetDir = "assets/components/fences/axelent_x-guard";
 
@@ -19,10 +42,10 @@ int main() {
     auto table   = loadTable(assetDir + "/combinations.json");
 
     factory::FactoryScene scene;
-    scene.place_node(-2000.f, -1500.f);  // SW
-    scene.place_node( 2000.f, -1500.f);  // SE
-    scene.place_node( 2000.f,  1500.f);  // NE
-    scene.place_node(-2000.f,  1500.f);  // NW
+    scene.place_node(-2000.f, -1500.f);
+    scene.place_node( 2000.f, -1500.f);
+    scene.place_node( 2000.f,  1500.f);
+    scene.place_node(-2000.f,  1500.f);
     scene.declare_opening(500);
 
     scene.solve(table, assetDir);
@@ -39,9 +62,10 @@ int main() {
 
     ss.renderer.shadowMap().enabled = true;
 
-    // Key light — warm white, casts shadows, no specular blob risk (steep angle)
+    // Key light: steep angle from upper-right → good for shadows, its floor
+    // reflection points away from the default camera so no blob.
     {
-        auto key = DirectionalLight::create(0xfff5ec, 0.7f);
+        auto key = DirectionalLight::create(0xfff5ec, 0.65f);
         key->position.set(6, 9, 4);
         key->castShadow = true;
         key->shadow->mapSize = {2048, 2048};
@@ -56,51 +80,47 @@ int main() {
         ss.scene->add(key);
     }
 
-    // Ambient — main brightness, near-white warm
-    ss.scene->add(AmbientLight::create(0xfff8f0, 0.8f));
+    // Specular fill: shallow angle from front-left, positioned so its floor
+    // reflection aligns with the default camera view → creates the specular
+    // the specularMap turns into stripes.
+    {
+        auto fill = DirectionalLight::create(0xfff0e8, 0.3f);
+        fill->position.set(-5, 4, -7);
+        ss.scene->add(fill);
+    }
 
-    // ── Fluorescent fixtures ─────────────────────────────────────────────────
-    // Two rows of tubes running along X, at ceiling height above the cell.
-    // Each row: 5 PointLights spaced 0.9m apart → 5 small specular spots merge
-    // into a strip on the polished floor.
-    const float fixtureY = 3.5f;
-    const std::array<float, 2> fixtureZ = {-0.6f, 0.6f};
-    const std::array<float, 5> fixtureX = {-1.8f, -0.9f, 0.0f, 0.9f, 1.8f};
+    ss.scene->add(AmbientLight::create(0xfff8f0, 0.75f));
 
-    for (float fz : fixtureZ) {
-        // Visible tube mesh
+    // ── Fluorescent fixture tubes (visual only — no lights) ──────────────────
+    {
         auto geo = BoxGeometry::create(3.8f, 0.04f, 0.10f);
         auto mat = MeshPhongMaterial::create();
-        mat->color     = Color(0xffffff);
-        mat->emissive  = Color(0xfff4e8);
-        ss.scene->add([&] {
+        mat->color    = Color(0xffffff);
+        mat->emissive = Color(0xfff4e8);
+        for (float fz : {-0.6f, 0.6f}) {
             auto tube = Mesh::create(geo, mat);
-            tube->position.set(0.0f, fixtureY, fz);
-            return tube;
-        }());
-
-        // Point lights along the tube
-        for (float fx : fixtureX) {
-            auto pt = PointLight::create(Color(0xfff4e8), 0.4f, 7.0f, 1.5f);
-            pt->position.set(fx, fixtureY, fz);
-            ss.scene->add(pt);
+            tube->position.set(0.0f, 3.5f, fz);
+            ss.scene->add(tube);
         }
     }
 
-    // ── Floor ────────────────────────────────────────────────────────────────
+    // ── Floor ─────────────────────────────────────────────────────────────────
+    // specularMap stripes align with tube Z positions: specular from the fill
+    // light shows only on the stripe bands → looks like fixture reflections.
     {
         auto geo = PlaneGeometry::create(60.0f, 60.0f);
         auto mat = MeshPhongMaterial::create();
-        mat->color     = Color(0x8c8278);
-        mat->specular  = Color(0xd0d0d0);
-        mat->shininess = 120;
+        mat->color       = Color(0x8c8278);
+        mat->specular    = Color(0xe0e0e0);
+        mat->shininess   = 40;
+        mat->specularMap = makeStripeSpecMap();
         auto floor = Mesh::create(geo, mat);
         floor->rotation.x    = -math::PI / 2.f;
         floor->receiveShadow = true;
         ss.scene->add(floor);
     }
 
-    // ── Fence ────────────────────────────────────────────────────────────────
+    // ── Fence ─────────────────────────────────────────────────────────────────
     OBJLoader loader;
     auto protos   = cell::loadCatalogProtos(loader, assetDir, catalog);
     auto fenceGrp = render::buildScene(scene, protos);

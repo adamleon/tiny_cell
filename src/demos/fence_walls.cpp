@@ -1,6 +1,5 @@
 #include <algorithm>
 
-#include <threepp/lights/RectAreaLight.hpp>
 #include <threepp/materials/MeshStandardMaterial.hpp>
 #include <threepp/renderers/wgpu/WgpuPathTracer.hpp>
 #include "common/scene_setup.hpp"
@@ -27,9 +26,6 @@ int main() {
     scene.solve(table, assetDir);
 
     // ── Scene setup ───────────────────────────────────────────────────────────
-    // Background = bright warm cream; in path tracing this IS the sky, so it
-    // provides ambient fill from all directions and the fog dissolves things
-    // into the same warm light rather than into darkness.
     SceneSetup ss("FenceWalls");
     ss.scene->background = Color(0xfff5e8);
     ss.camera->position.set(7.0f, 5.0f, 9.0f);
@@ -42,38 +38,24 @@ int main() {
     auto& pt = ss.renderer.pathTracer();
     pt.setReSTIREnabled(true);
     pt.setMaxBounces(4);
-    pt.setExposure(1.1f);
+    pt.setExposure(1.2f);
 
-    // ── Lighting ──────────────────────────────────────────────────────────────
-    // Three RectAreaLight strips that simulate a high bank of factory windows
-    // on the left side.  They are tilted ~30° from vertical toward the camera
-    // so the light comes in at a sunrise angle — directional shadows — while
-    // still being overhead enough to reflect as three parallel strips in the
-    // polished floor.  mesh()->visible = false so the sources are never seen.
+    // Warm directional key — sunrise angle from camera-right, slightly front.
     {
-        const Color  fc(0xffc870);
-        // rotation.x = -PI/2 is straight down. Adding +PI/6 tilts the emitting
-        // face ~30° toward +X (camera side) → light rakes across the cell from
-        // upper-right, casting diagonal shadows to the left.
-        const float  tilt = -math::PI / 2.0f + math::PI / 6.0f;
-        const float  fy   = 3.2f;
-        const float  fx   = 1.2f;  // offset toward camera side so strips clear
-        for (float z : {-0.9f, 0.0f, 0.9f}) {
-            auto fix = RectAreaLight::create(fc, 28.0f, 3.5f, 0.25f);
-            fix->rotation.x = tilt;
-            fix->position.set(fx, fy, z);
-            fix->mesh()->visible = false;
-            ss.scene->add(fix);
-        }
+        auto sun = DirectionalLight::create(Color(0xffc87a), 2.5f);
+        sun->position.set(-5, 8, 4);
+        sun->castShadow = true;
+        ss.scene->add(sun);
     }
+    // Soft fill so shadows aren't pitch black.
+    ss.scene->add(AmbientLight::create(Color(0xfff0e0), 1.2f));
 
-    // Floor — warm polished concrete.  roughness 0.3: area-light strips show
-    // as clear reflections; no tight specular blob from any point source.
+    // Floor — warm concrete, moderate polish.
     {
         auto geo = PlaneGeometry::create(60.0f, 60.0f);
         auto mat = MeshStandardMaterial::create();
         mat->color     = Color(0xede8d8);
-        mat->roughness = 0.3f;
+        mat->roughness = 0.4f;
         mat->metalness = 0.0f;
         auto floor = Mesh::create(geo, mat);
         floor->rotation.x    = -math::PI / 2.f;
@@ -92,8 +74,6 @@ int main() {
     ss.scene->add(fenceGrp);
 
     ss.canvas.animate([&] {
-        // Fog dissolves into the warm bright background — things soften into
-        // light, not darkness.  Set each frame so path tracer picks it up.
         ss.scene->fog = FogExp2(Color(0xfff5e8), 0.06f);
         ss.renderer.render(*ss.scene, *ss.camera);
     });

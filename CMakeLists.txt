@@ -40,6 +40,14 @@ function(add_demo name)
         ${threepp_SOURCE_DIR}/src/external/nlohmann
     )
     target_compile_options(${name} PRIVATE -Wall -Wextra)
+    if(WIN32 AND WGPU_NATIVE_DLL)
+        add_custom_command(TARGET ${name} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${WGPU_NATIVE_DLL}"
+                "$<TARGET_FILE_DIR:${name}>/wgpu_native.dll"
+            COMMENT "Copying wgpu_native.dll to ${name} output directory"
+        )
+    endif()
 endfunction()
 
 # ── Demos ─────────────────────────────────────────────────────────────────────

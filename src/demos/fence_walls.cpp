@@ -1,6 +1,8 @@
 #include <algorithm>
 
 #include <threepp/cameras/OrthographicCamera.hpp>
+#include <threepp/geometries/BoxGeometry.hpp>
+#include <threepp/lights/PointLight.hpp>
 #include <threepp/scenes/Fog.hpp>
 #include "common/scene_setup.hpp"
 #include "cell/fence_catalog.hpp"
@@ -16,14 +18,12 @@ int main() {
     auto catalog = cell::loadCatalog(assetDir + "/catalog.json");
     auto table   = loadTable(assetDir + "/combinations.json");
 
-    // Declare layout intent: 4 corner nodes (mm, Z-up) + one unallocated slab.
-    // The solver assigns the slab to edge 0 (south) and chooses panel combinations.
     factory::FactoryScene scene;
     scene.place_node(-2000.f, -1500.f);  // SW
     scene.place_node( 2000.f, -1500.f);  // SE
     scene.place_node( 2000.f,  1500.f);  // NE
     scene.place_node(-2000.f,  1500.f);  // NW
-    scene.declare_opening(500);          // slab — solver picks edge + position
+    scene.declare_opening(500);
 
     scene.solve(table, assetDir);
 
@@ -39,46 +39,68 @@ int main() {
 
     ss.renderer.shadowMap().enabled = true;
 
-    // Soft warm-white key — casts shadows
+    // Key light — warm white, casts shadows, no specular blob risk (steep angle)
     {
-        auto key = DirectionalLight::create(0xfff5ec, 0.9f);
+        auto key = DirectionalLight::create(0xfff5ec, 0.7f);
         key->position.set(6, 9, 4);
         key->castShadow = true;
         key->shadow->mapSize = {2048, 2048};
         key->shadow->bias    = -0.0005f;
-        // Tight frustum: covers the cell + a little floor; near/far kept small
-        // so bias stays in mm range (bias is in depth-space: offset ≈ bias × far).
         auto* cam = dynamic_cast<OrthographicCamera*>(key->shadow->camera.get());
         if (cam) {
-            cam->left      = -8;   cam->right    =  8;
-            cam->top       =  8;   cam->bottom   = -8;
+            cam->left = -8; cam->right  =  8;
+            cam->top  =  8; cam->bottom = -8;
             cam->nearPlane = 1.0f; cam->farPlane = 25.0f;
             cam->updateProjectionMatrix();
         }
         ss.scene->add(key);
     }
-    // Cool blue-white fill — no shadows, just lifts the dark side
-    {
-        auto fill = DirectionalLight::create(0xd0e4f8, 0.5f);
-        fill->position.set(-5, 4, -6);
-        ss.scene->add(fill);
-    }
-    // Bright near-white ambient
-    ss.scene->add(AmbientLight::create(0xfff8f0, 0.7f));
 
-    // Floor — fixed large plane; fog dissolves the edge.
+    // Ambient — main brightness, near-white warm
+    ss.scene->add(AmbientLight::create(0xfff8f0, 0.8f));
+
+    // ── Fluorescent fixtures ─────────────────────────────────────────────────
+    // Two rows of tubes running along X, at ceiling height above the cell.
+    // Each row: 5 PointLights spaced 0.9m apart → 5 small specular spots merge
+    // into a strip on the polished floor.
+    const float fixtureY = 3.5f;
+    const std::array<float, 2> fixtureZ = {-0.6f, 0.6f};
+    const std::array<float, 5> fixtureX = {-1.8f, -0.9f, 0.0f, 0.9f, 1.8f};
+
+    for (float fz : fixtureZ) {
+        // Visible tube mesh
+        auto geo = BoxGeometry::create(3.8f, 0.04f, 0.10f);
+        auto mat = MeshPhongMaterial::create();
+        mat->color     = Color(0xffffff);
+        mat->emissive  = Color(0xfff4e8);
+        ss.scene->add([&] {
+            auto tube = Mesh::create(geo, mat);
+            tube->position.set(0.0f, fixtureY, fz);
+            return tube;
+        }());
+
+        // Point lights along the tube
+        for (float fx : fixtureX) {
+            auto pt = PointLight::create(Color(0xfff4e8), 0.4f, 7.0f, 1.5f);
+            pt->position.set(fx, fixtureY, fz);
+            ss.scene->add(pt);
+        }
+    }
+
+    // ── Floor ────────────────────────────────────────────────────────────────
     {
         auto geo = PlaneGeometry::create(60.0f, 60.0f);
         auto mat = MeshPhongMaterial::create();
         mat->color     = Color(0x8c8278);
-        mat->specular  = Color(0xb0a898);
-        mat->shininess = 55;
+        mat->specular  = Color(0xd0d0d0);
+        mat->shininess = 120;
         auto floor = Mesh::create(geo, mat);
-        floor->rotation.x  = -math::PI / 2.f;
+        floor->rotation.x    = -math::PI / 2.f;
         floor->receiveShadow = true;
         ss.scene->add(floor);
     }
 
+    // ── Fence ────────────────────────────────────────────────────────────────
     OBJLoader loader;
     auto protos   = cell::loadCatalogProtos(loader, assetDir, catalog);
     auto fenceGrp = render::buildScene(scene, protos);

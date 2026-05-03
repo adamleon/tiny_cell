@@ -37,8 +37,32 @@ struct DeclaredOpeningComponent {
     std::optional<int> desired_position_mm;  // absent = solver-assigned, not yet anchored
     int                width_mm            = 0;
     float              mobility            = 0.0f;  // 0.0 = immovable fail-safe
+    int                hint_edge_index     = -1;    // -1 = unallocated; used before solve() assigns parent_edge
 };
 
-// ── Future entity types go here (robot, belt, pallet, …) ─────────────────────
+// ── Transport / workflow ──────────────────────────────────────────────────────
+
+struct TransportComponent {
+    float speed_mm_s = 200.0f;
+    bool  running    = true;
+    int   capacity   = 0;       // 0 = unlimited
+};
+
+struct ConveyorBeltComponent {
+    std::string catalog_ref            = "generic/flat-belt";
+    int         width_mm               = 200;
+    int         length_mm              = 2000;
+    int         belt_surface_height_mm = 800;
+    int         opening_clearance_mm   = 50;
+    float       belt_speed_mm_s        = 200.0f;
+    bool        direction_a_to_b       = true;
+};
+
+struct FlowNodeComponent {
+    entt::entity entry = entt::null;  // null = source
+    entt::entity exit  = entt::null;  // null = sink
+};
+
+// ── Future entity types go here (robot, station, pallet, …) ──────────────────
 
 }  // namespace factory

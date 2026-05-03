@@ -52,6 +52,7 @@ endfunction()
 
 # ── Demos ─────────────────────────────────────────────────────────────────────
 add_demo(fence_walls)
+add_demo(palletizing)
 
 # ── Generator tool (no threepp, just nlohmann/json) ───────────────────────────
 add_executable(GenLookup src/tools/gen_lookup.cpp)

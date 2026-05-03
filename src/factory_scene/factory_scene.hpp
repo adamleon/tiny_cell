@@ -66,6 +66,20 @@ public:
         return e;
     }
 
+    // Declare an opening anchored to a specific edge at a known position (e.g. a belt pass-through).
+    // edge_index indexes the node polygon ring: edge 0 connects node 0→1, edge 1 connects 1→2, etc.
+    // position_mm is the center of the opening measured from node_a along the edge.
+    entt::entity declare_opening_anchored(int edge_index, int position_mm, int width_mm) {
+        auto id  = next_id_++;
+        auto e   = get_or_create(id);
+        auto& oc = registry_.emplace_or_replace<DeclaredOpeningComponent>(e);
+        oc.width_mm            = width_mm;
+        oc.desired_position_mm = position_mm;
+        oc.hint_edge_index     = edge_index;
+        // parent_edge stays entt::null until solve() runs
+        return e;
+    }
+
     // Translate ECS state → SolverInput → solve → apply() back into ECS.
     void solve(const LookupTable& table, const std::string& catalog_path) {
         solver::SolverInput in;
@@ -77,9 +91,17 @@ public:
         }
         for (const auto& [sid, e] : id_map_) {
             if (sid == kSceneEntityId) continue;
-            if (const auto* oc = registry_.try_get<DeclaredOpeningComponent>(e))
-                if (oc->parent_edge == entt::null)
+            if (const auto* oc = registry_.try_get<DeclaredOpeningComponent>(e)) {
+                if (oc->parent_edge != entt::null) continue;  // already placed
+                if (oc->hint_edge_index >= 0 && oc->desired_position_mm.has_value()) {
+                    in.anchored_openings.push_back({
+                        sid, oc->width_mm,
+                        oc->hint_edge_index, *oc->desired_position_mm
+                    });
+                } else {
                     in.unallocated_openings.push_back({sid, oc->width_mm});
+                }
+            }
         }
 
         apply(solver::solve(in, table));

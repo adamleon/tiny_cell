@@ -26,10 +26,19 @@ struct OpeningSpec {
     int      width_mm  = 0;
 };
 
+// An opening anchored to a specific edge at a known position (e.g. a belt pass-through).
+struct AnchoredOpeningSpec {
+    EntityId entity_id   = kNewEntity;
+    int      width_mm    = 0;
+    int      edge_index  = 0;   // index into SolverInput::nodes ring (edge i connects node i → node i+1)
+    int      position_mm = 0;   // center of opening measured from node_a, mm
+};
+
 struct SolverInput {
-    std::vector<NodeSpec>    nodes;
-    std::vector<OpeningSpec> unallocated_openings;
-    std::string              catalog_path;
+    std::vector<NodeSpec>            nodes;
+    std::vector<OpeningSpec>         unallocated_openings;
+    std::vector<AnchoredOpeningSpec> anchored_openings;    // belt pass-throughs, fixed edge+position
+    std::string                      catalog_path;
 };
 
 // ── Output types ──────────────────────────────────────────────────────────────

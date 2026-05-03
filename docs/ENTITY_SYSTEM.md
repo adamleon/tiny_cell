@@ -29,7 +29,12 @@ Every visible or interactive element is an entity, referenced by a stable `entt:
 | WorldFeature | User / blueprint import | Pose, WorldFeature *(future)*, Visual *(future)*, Interactive *(future)* |
 | SpanConstraint | User / blueprint import | Pose, SpanConstraint *(future)*, Interactive *(future)* |
 | Robot | User / blueprint import | Pose, Robot *(future)*, Visual *(future)*, Interactive *(future)*, Simulation *(future)* |
-| ConveyorBelt | User / blueprint import | Pose, ConveyorBelt *(future)*, Visual *(future)*, Interactive *(future)*, Simulation *(future)* |
+| ConveyorBelt | User / workflow *(future)* | Pose, Transport, ConveyorBelt, FlowNode, Visual *(future)*, Interactive *(future)*, Simulation *(future)* |
+| Station | User / workflow *(future)* | Pose, Station, *type-specific*, Visual *(future)* |
+| PalletizingStation | User / workflow *(future)* | Pose, Station, PalletizingStation, Visual *(future)* |
+| Mechanism | Solver | Pose, Mechanism, *type-specific*, Visual *(future)*, Simulation *(future)* |
+| SpawnItem | User / workflow *(future)* | Pose, SpawnItem, FlowNode, Visual *(future)* |
+| DespawnItem | User / workflow *(future)* | Pose, DespawnItem, FlowNode, Visual *(future)* |
 | WorkPiece | Simulation | Pose, Visual *(future)*, Simulation *(future)* |
 
 An entity's role is determined by which components it carries — there is no discriminator field. `FactoryScene` is the only place that creates entities and attaches components, which prevents nonsense combinations.
@@ -91,9 +96,123 @@ DeclaredOpeningComponent
   desired_position_mm  optional<int>  — absent if solver-assigned, set when anchored
   width_mm             int            — always present
   mobility             float          — 0.0 = immovable (default and fail-safe)
+  type                 OpeningType    — None (default) | Open | Solid
 ```
 
+`OpeningType` controls how the VisualUpdateSystem renders the reserved space:
+
+| Type | Rendering | Typical use |
+|---|---|---|
+| `None` | Nothing rendered in the gap | Walls, pillars, machine footprints |
+| `Open` | Physical gap; filled with beams or half-panels *(future)* | Doors, belt pass-throughs, personnel access |
+| `Solid` | Fence section rendered; something is mounted here | Control boxes, racks, cable trays attached to the wall |
+
+`None` is the default and the only type currently implemented. `Open` and `Solid` are defined in the schema now so that future rendering work has a stable target.
+
+The solver may group multiple belt pass-throughs into a single `Open` opening when the combined width plus clearances fits within a standard panel span (e.g. five 100 mm belts grouped into one 750 mm opening). When this happens, the solver writes a single `DeclaredOpeningComponent` with the combined width; the individual belt connections are tracked via their `FlowNodeComponent` references, not by separate openings.
+
 Allocation state is determined entirely by which optional fields are set — no separate flag. See [LAYOUT_SOLVER.md](LAYOUT_SOLVER.md) for how the solver handles each allocation state.
+
+### FlowNodeComponent
+
+Carried by every entity that participates in item flow: `ConveyorBelt`, `SpawnItem`, `DespawnItem`, and any future station type (robot cells, buffers, etc.).
+
+```
+FlowNodeComponent
+  entry  entt::entity   — upstream entity (null if this is a source)
+  exit   entt::entity   — downstream entity (null if this is a sink)
+```
+
+This forms a singly-linked directed graph of item flow using plain `entt::entity` handles. No special "workflow node" base type is needed — any entity carrying `FlowNodeComponent` can appear anywhere in the graph.
+
+Example — two belts in series:
+
+```
+SpawnItem  →  Belt1  →  Belt2  →  DespawnItem
+  exit=Belt1   entry=SpawnItem   entry=Belt1    entry=Belt2
+               exit=Belt2        exit=DespawnItem  exit=null
+```
+
+The workflow solver (future) will build and validate these graphs. For current demos, the graph is wired manually in code.
+
+### StationComponent
+
+Carried by every station entity alongside a station-type-specific component. Holds what all stations share.
+
+```
+StationComponent
+  name:      string
+  mechanism: entt::entity   — the actor performing work (null until solver places one)
+```
+
+The mechanism is a separate entity carrying its own specific component. What kind of mechanism it is — robot arm, diverter flap, pneumatic pusher — is determined entirely by which components that entity carries. The station does not discriminate.
+
+### MechanismComponent
+
+Marker component on mechanism entities. Every mechanism carries this alongside its type-specific component.
+
+```
+MechanismComponent
+  (no fields — presence identifies the entity as a mechanism)
+```
+
+### RobotArmComponent *(future)*
+
+```
+RobotArmComponent
+  model_ref:  string   — catalog reference for the robot model
+  reach_mm:   int      — maximum reach radius
+  pose:       (in PoseComponent, solver output — never user-placed)
+```
+
+Robot position is always **solver output**. The robot placement solver takes the set of required reach poses (pick and place positions derived from belt geometry and stack pattern) and finds the optimal base position within the robot's workspace. The objective function is configurable: minimise energy (minimise total joint travel), minimise cycle time, or minimise footprint. The solver must also verify that all required poses lie within the reachable annulus — not just the reach sphere, which has a dead zone below the base and joint-limit exclusions.
+
+### PalletizingStationComponent
+
+```
+PalletizingStationComponent
+  box_belt:           entt::entity   — belt delivering boxes; robot picks from end
+  pallet_belt:        entt::entity   — belt that carries pallet in and out
+  item_definition:    entt::entity   — the box type being stacked
+  pallet_definition:  entt::entity   — the pallet type
+  stack_layers:       int            — user-configurable; solver derives stack pattern
+```
+
+Staging position (where the pallet stops on the pallet belt during stacking) is **derived at runtime** from belt geometry — not stored in this component. For the first implementation: it is the intersection of the box belt's axis extended with the pallet belt's axis, projected onto the pallet belt segment. Parallel belts produce no intersection; that case is deferred.
+
+### TransportComponent
+
+Carried by every transport entity alongside a transport-type-specific component. Holds what all transports share.
+
+```
+TransportComponent
+  speed_mm_s:    float   — current transport speed
+  running:       bool    — true = moving, false = stopped/paused
+  capacity:      int     — max items in transit simultaneously (0 = unlimited)
+```
+
+### ConveyorBeltComponent
+
+```
+ConveyorBeltComponent
+  catalog_ref              string         — "generic/flat-belt" | "mk/guf-p-2000"
+  width_mm                 int            — must be in catalog discrete list
+  length_mm                int            — within [catalog.min_length_mm, catalog.max_length_mm]
+  belt_surface_height_mm   int            — floor to belt top; leg height is derived
+  opening_clearance_mm     int = 50       — added each side for fence opening width
+  belt_speed_mm_s          float = 200    — for UV animation; 0 = stopped
+  direction_a_to_b         bool = true    — travel direction relative to PoseComponent orientation
+```
+
+See [CONVEYOR_BELTS.md](CONVEYOR_BELTS.md) for catalog structure and procedural mesh generation.
+
+### SpawnItemComponent *(future)*
+
+Marks an entity as a source of items entering the scene. Carries item type and spawn rate. Always appears as `entry = null` in the flow graph.
+
+### DespawnItemComponent *(future)*
+
+Marks an entity as a sink that removes items from the scene. Always appears as `exit = null` in the flow graph.
 
 ### VisualComponent *(future)*
 

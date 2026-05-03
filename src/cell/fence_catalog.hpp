@@ -4,7 +4,7 @@
 #include <stdexcept>
 #include <string>
 #include <threepp/loaders/OBJLoader.hpp>
-#include <threepp/materials/MeshPhongMaterial.hpp>
+#include <threepp/materials/MeshStandardMaterial.hpp>
 #include <threepp/math/MathUtils.hpp>
 #include <threepp/objects/Group.hpp>
 #include <threepp/objects/Mesh.hpp>
@@ -62,20 +62,20 @@ inline CatalogProtos loadCatalogProtos(
     protos.edge_height_mm = catalogEdgeHeight(catalog);
     protos.post_width_mm  = catalogPostWidth(catalog);
 
-    auto panelMat = MeshPhongMaterial::create();
+    auto panelMat = MeshStandardMaterial::create();
     panelMat->color     = Color(0xa8a8a8);
-    panelMat->specular  = Color(0x888888);
-    panelMat->shininess = 50;
+    panelMat->roughness = 0.4f;
+    panelMat->metalness = 0.8f;
     for (const auto& p : catalog["panels"]) {
         int w = p["width_mm"].get<int>();
         protos.panels[w] = buildComponentProto(
             loader, dir + "/" + p["filename"].get<std::string>(), p, panelMat);
     }
 
-    auto postMat = MeshPhongMaterial::create();
+    auto postMat = MeshStandardMaterial::create();
     postMat->color     = Color(0x707070);
-    postMat->specular  = Color(0x707070);
-    postMat->shininess = 70;
+    postMat->roughness = 0.3f;
+    postMat->metalness = 0.9f;
     const auto& post = catalog["post"];
     protos.post = buildComponentProto(
         loader, dir + "/" + post["filename"].get<std::string>(), post, postMat);

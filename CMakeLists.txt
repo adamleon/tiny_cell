@@ -8,11 +8,12 @@ include(FetchContent)
 
 set(THREEPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(THREEPP_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(THREEPP_WITH_WGPU ON CACHE BOOL "" FORCE)
 
 FetchContent_Declare(
     threepp
     GIT_REPOSITORY https://github.com/markaren/threepp.git
-    GIT_TAG 57aae69f08deba6e361dc8ec86c4ca6841fac43c
+    GIT_TAG 1d3a6ab58f9aa392e7d8869cd5671b3c62c5d27a
 )
 FetchContent_MakeAvailable(threepp)
 

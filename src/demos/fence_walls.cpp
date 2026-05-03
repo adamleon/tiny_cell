@@ -1,6 +1,7 @@
 #include <algorithm>
 
-#include <threepp/cameras/OrthographicCamera.hpp>
+#include <threepp/materials/MeshStandardMaterial.hpp>
+#include <threepp/renderers/wgpu/WgpuPathTracer.hpp>
 #include <threepp/scenes/Fog.hpp>
 #include "common/scene_setup.hpp"
 #include "cell/fence_catalog.hpp"
@@ -35,48 +36,41 @@ int main() {
     ss.controls->maxPolarAngle = math::PI / 2.0f - 0.05f;
     ss.controls->update();
 
-    ss.renderer.shadowMap().enabled = true;
+    // Path tracer — handles transparent shadows physically.
+    ss.renderer.usePathTracer = true;
+    auto& pt = ss.renderer.pathTracer();
+    pt.setReSTIREnabled(true);
+    pt.setMaxBounces(4);
 
-    // Single directional key light + shadows.
+    // Single directional key light.
     {
         auto key = DirectionalLight::create(0xfff5ec, 0.65f);
         key->position.set(6, 9, 4);
         key->castShadow = true;
-        key->shadow->mapSize = {2048, 2048};
-        key->shadow->bias    = -0.0005f;
-        auto* cam = dynamic_cast<OrthographicCamera*>(key->shadow->camera.get());
-        if (cam) {
-            cam->left = -8; cam->right  =  8;
-            cam->top  =  8; cam->bottom = -8;
-            cam->nearPlane = 1.0f; cam->farPlane = 25.0f;
-            cam->updateProjectionMatrix();
-        }
         ss.scene->add(key);
     }
-
     ss.scene->add(AmbientLight::create(0xfff8f0, 0.75f));
 
-    // Floor — polished but specular kept dim so the blob stays subtle.
+    // Floor
     {
         auto geo = PlaneGeometry::create(60.0f, 60.0f);
-        auto mat = MeshPhongMaterial::create();
+        auto mat = MeshStandardMaterial::create();
         mat->color     = Color(0x8c8278);
-        mat->specular  = Color(0x787878);
-        mat->shininess = 80;
+        mat->roughness = 0.4f;
+        mat->metalness = 0.0f;
         auto floor = Mesh::create(geo, mat);
         floor->rotation.x    = -math::PI / 2.f;
         floor->receiveShadow = true;
         ss.scene->add(floor);
     }
 
-    // Fence
+    // Fence — all objects cast + receive shadows; path tracer handles
+    // transmission correctly so the opening no longer needs special casing.
     OBJLoader loader;
     auto protos   = cell::loadCatalogProtos(loader, assetDir, catalog);
     auto fenceGrp = render::buildScene(scene, protos);
     fenceGrp->traverse([](Object3D& obj) {
-        if (auto* mesh = dynamic_cast<Mesh*>(&obj)) {
-            obj.castShadow = !mesh->material()->transparent;
-        }
+        obj.castShadow    = true;
         obj.receiveShadow = true;
     });
     ss.scene->add(fenceGrp);

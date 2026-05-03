@@ -5,7 +5,7 @@
 
 #include <entt/entt.hpp>
 #include <threepp/geometries/BoxGeometry.hpp>
-#include <threepp/materials/MeshPhongMaterial.hpp>
+#include <threepp/materials/MeshPhysicalMaterial.hpp>
 #include <threepp/objects/Group.hpp>
 #include <threepp/objects/Mesh.hpp>
 
@@ -103,12 +103,12 @@ inline std::shared_ptr<threepp::Object3D> buildScene(
                     float ow_m = ops[i].width_mm * 0.001f;
                     float oh_m = protos.edge_height_mm * 0.001f;
                     auto geo   = BoxGeometry::create(ow_m, oh_m, 0.05f);
-                    auto mat   = MeshPhongMaterial::create();
-                    mat->color       = Color(0xc8a060);
-                    mat->specular    = Color(0xffd580);
-                    mat->shininess   = 40;
-                    mat->transparent = true;
-                    mat->opacity     = 0.75f;
+                    auto mat = MeshPhysicalMaterial::create();
+                    mat->color        = Color(0xc8a060);
+                    mat->transmission = 0.75f;
+                    mat->roughness    = 0.05f;
+                    mat->metalness    = 0.0f;
+                    mat->ior          = 1.5f;
                     auto box = Mesh::create(geo, mat);
                     box->position.set(cursor + ow_m * 0.5f, oh_m * 0.5f, 0.f);
                     grp->add(box);

@@ -36,7 +36,7 @@ inline std::shared_ptr<threepp::DataTexture> makeHazardTexture() {
     std::vector<unsigned char> px(W * H * 4);
     for (int y = 0; y < H; y++) {
         for (int x = 0; x < W; x++) {
-            bool yellow = (((x + y) / 8) % 2) == 0;
+            bool yellow = (((x + y) / 32) % 2) == 0;
             int i = (y * W + x) * 4;
             px[i+0] = yellow ? 240 : 25;
             px[i+1] = yellow ? 180 : 25;
@@ -142,18 +142,22 @@ inline std::shared_ptr<threepp::Object3D> buildScene(
             // Flat plane lying on the floor, spanning the full visual width of
             // the edge. UV repeat tiles the texture at ~300mm per stripe pitch.
             {
-                const float stripWidth = 0.4f;
+                const float stripWidth = 0.1f;   // 100 mm
                 const float edgeLen    = total_mm * 0.001f;
-                const float pitch      = 0.3f;  // world metres per texture tile
+                // Texture has 2 diagonal stripe cycles per tile; tile at 100mm
+                // along the edge so each stripe is ~50mm wide.
                 auto geo = PlaneGeometry::create(edgeLen, stripWidth);
                 auto mat = MeshStandardMaterial::create();
                 mat->map = hazardTex;
-                mat->map->repeat.set(edgeLen / pitch, stripWidth / pitch);
+                mat->map->repeat.set(edgeLen / 0.1f, 1.0f);
                 mat->roughness = 0.6f;
                 mat->metalness = 0.0f;
                 auto strip = Mesh::create(geo, mat);
                 strip->rotation.x = -math::PI / 2.0f;
-                strip->position.set(0.0f, 0.002f, 0.0f);  // just above floor
+                // Local -Z is the cell exterior (consistent for all edges due
+                // to winding order). Offset the strip so its inner edge sits on
+                // the fence line and it extends outward.
+                strip->position.set(0.0f, 0.002f, -stripWidth / 2.0f);
                 strip->receiveShadow = true;
                 grp->add(strip);
             }

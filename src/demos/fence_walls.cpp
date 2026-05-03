@@ -2,7 +2,6 @@
 
 #include <threepp/materials/MeshStandardMaterial.hpp>
 #include <threepp/renderers/wgpu/WgpuPathTracer.hpp>
-#include <threepp/scenes/Fog.hpp>
 #include "common/scene_setup.hpp"
 #include "cell/fence_catalog.hpp"
 #include "cell/fence_solver.hpp"
@@ -28,8 +27,7 @@ int main() {
 
     // ── Scene setup ───────────────────────────────────────────────────────────
     SceneSetup ss("FenceWalls");
-    ss.scene->background = Color(0xede8e2);
-    ss.scene->fog         = Fog(Color(0xede8e2), 12.0f, 22.0f);
+    ss.scene->background = Color(0xfff8f0);  // warm cream sky — doubles as path tracer env
     ss.camera->position.set(7.0f, 5.0f, 9.0f);
     ss.camera->lookAt({0, 0.5f, 0});
     ss.controls->target = {0, 0.5f, 0};
@@ -41,22 +39,23 @@ int main() {
     auto& pt = ss.renderer.pathTracer();
     pt.setReSTIREnabled(true);
     pt.setMaxBounces(4);
+    pt.setExposure(1.3f);
 
-    // Single directional key light.
+    // Warm sun from upper-right.
     {
-        auto key = DirectionalLight::create(0xfff5ec, 0.65f);
+        auto key = DirectionalLight::create(0xffe8c8, 2.0f);
         key->position.set(6, 9, 4);
         key->castShadow = true;
         ss.scene->add(key);
     }
-    ss.scene->add(AmbientLight::create(0xfff8f0, 0.75f));
+    ss.scene->add(AmbientLight::create(0xfff8f0, 1.5f));
 
-    // Floor
+    // Floor — warm light concrete, slightly polished.
     {
         auto geo = PlaneGeometry::create(60.0f, 60.0f);
         auto mat = MeshStandardMaterial::create();
-        mat->color     = Color(0x8c8278);
-        mat->roughness = 0.4f;
+        mat->color     = Color(0xd0c4b0);
+        mat->roughness = 0.25f;
         mat->metalness = 0.0f;
         auto floor = Mesh::create(geo, mat);
         floor->rotation.x    = -math::PI / 2.f;
@@ -76,6 +75,8 @@ int main() {
     ss.scene->add(fenceGrp);
 
     ss.canvas.animate([&] {
+        ss.scene->fog = FogExp2(Color(0xfff5e8), 0.04f);
+        pt.setFogAnisotropy(0.2f);
         ss.renderer.render(*ss.scene, *ss.camera);
     });
 

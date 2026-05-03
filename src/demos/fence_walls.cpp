@@ -27,51 +27,53 @@ int main() {
     scene.solve(table, assetDir);
 
     // ── Scene setup ───────────────────────────────────────────────────────────
-    // Background = the "factory haze" colour; fog dissolves everything into
-    // this warm bright cream so distant geometry softens without going dark.
+    // Background = bright warm cream; in path tracing this IS the sky, so it
+    // provides ambient fill from all directions and the fog dissolves things
+    // into the same warm light rather than into darkness.
     SceneSetup ss("FenceWalls");
-    ss.scene->background = Color(0xfff6e8);
+    ss.scene->background = Color(0xfff5e8);
     ss.camera->position.set(7.0f, 5.0f, 9.0f);
     ss.camera->lookAt({0, 0.5f, 0});
     ss.controls->target = {0, 0.5f, 0};
     ss.controls->maxPolarAngle = math::PI / 2.0f - 0.05f;
     ss.controls->update();
 
-    // Path tracer — handles transparent shadows + RectAreaLight physically.
     ss.renderer.usePathTracer = true;
     auto& pt = ss.renderer.pathTracer();
     pt.setReSTIREnabled(true);
     pt.setMaxBounces(4);
     pt.setExposure(1.1f);
 
-    // Bright warm fill — simulates the haze/ceiling acting as a giant softbox.
-    ss.scene->add(AmbientLight::create(Color(0xfff0d8), 2.0f));
-
-    // Overhead fixture strips — warm golden, aimed downward.
-    // Reflections in the polished floor appear as three parallel strips.
+    // ── Lighting ──────────────────────────────────────────────────────────────
+    // Three RectAreaLight strips that simulate a high bank of factory windows
+    // on the left side.  They are tilted ~30° from vertical toward the camera
+    // so the light comes in at a sunrise angle — directional shadows — while
+    // still being overhead enough to reflect as three parallel strips in the
+    // polished floor.  mesh()->visible = false so the sources are never seen.
     {
-        const Color  fixtureColor(0xffe0a0);
-        const float  intensity  = 20.0f;
-        const float  length     = 3.2f;
-        const float  width      = 0.12f;
-        const float  y          = 3.0f;
-        const float  zPos[]     = { -0.9f, 0.0f, 0.9f };
-
-        for (float z : zPos) {
-            auto fix = RectAreaLight::create(fixtureColor, intensity, length, width);
-            fix->rotation.x = -math::PI / 2.0f;  // face downward
-            fix->position.set(0.0f, y, z);
+        const Color  fc(0xffc870);
+        // rotation.x = -PI/2 is straight down. Adding +PI/6 tilts the emitting
+        // face ~30° toward +X (camera side) → light rakes across the cell from
+        // upper-right, casting diagonal shadows to the left.
+        const float  tilt = -math::PI / 2.0f + math::PI / 6.0f;
+        const float  fy   = 3.2f;
+        const float  fx   = 1.2f;  // offset toward camera side so strips clear
+        for (float z : {-0.9f, 0.0f, 0.9f}) {
+            auto fix = RectAreaLight::create(fc, 28.0f, 3.5f, 0.25f);
+            fix->rotation.x = tilt;
+            fix->position.set(fx, fy, z);
+            fix->mesh()->visible = false;
             ss.scene->add(fix);
         }
     }
 
-    // Floor — warm polished concrete: bright base colour, low roughness so
-    // fixture strips are visible as clean reflections.
+    // Floor — warm polished concrete.  roughness 0.3: area-light strips show
+    // as clear reflections; no tight specular blob from any point source.
     {
         auto geo = PlaneGeometry::create(60.0f, 60.0f);
         auto mat = MeshStandardMaterial::create();
-        mat->color     = Color(0xe8dfd0);
-        mat->roughness = 0.15f;
+        mat->color     = Color(0xede8d8);
+        mat->roughness = 0.3f;
         mat->metalness = 0.0f;
         auto floor = Mesh::create(geo, mat);
         floor->rotation.x    = -math::PI / 2.f;
@@ -90,8 +92,9 @@ int main() {
     ss.scene->add(fenceGrp);
 
     ss.canvas.animate([&] {
-        // Fog dissolves into the bright background — warm haze, not dark void.
-        ss.scene->fog = FogExp2(Color(0xfff6e8), 0.06f);
+        // Fog dissolves into the warm bright background — things soften into
+        // light, not darkness.  Set each frame so path tracer picks it up.
+        ss.scene->fog = FogExp2(Color(0xfff5e8), 0.06f);
         ss.renderer.render(*ss.scene, *ss.camera);
     });
 

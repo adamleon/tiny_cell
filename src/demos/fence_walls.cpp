@@ -27,8 +27,10 @@ int main() {
     scene.solve(table, assetDir);
 
     // ── Scene setup ───────────────────────────────────────────────────────────
+    // Background = the "factory haze" colour; fog dissolves everything into
+    // this warm bright cream so distant geometry softens without going dark.
     SceneSetup ss("FenceWalls");
-    ss.scene->background = Color(0x080604);  // near-black warm void
+    ss.scene->background = Color(0xfff6e8);
     ss.camera->position.set(7.0f, 5.0f, 9.0f);
     ss.camera->lookAt({0, 0.5f, 0});
     ss.controls->target = {0, 0.5f, 0};
@@ -42,35 +44,34 @@ int main() {
     pt.setMaxBounces(4);
     pt.setExposure(1.1f);
 
-    // Overhead fixture strips — warm sunrise orange, aimed downward.
-    // Three parallel rows above the cell; RectAreaLight auto-creates its own
-    // emissive quad mesh, so the physical tubes are visible in reflections.
-    {
-        const Color  fixtureColor(0xffa060);
-        const float  fixtureIntensity = 18.0f;
-        const float  fixtureLength    = 3.2f;  // slightly overhangs the ±1.5m cell depth
-        const float  fixtureWidth     = 0.12f;
-        const float  fixtureY         = 3.0f;
-        const float  zPositions[]     = { -0.9f, 0.0f, 0.9f };
+    // Bright warm fill — simulates the haze/ceiling acting as a giant softbox.
+    ss.scene->add(AmbientLight::create(Color(0xfff0d8), 2.0f));
 
-        for (float z : zPositions) {
-            auto fix = RectAreaLight::create(fixtureColor, fixtureIntensity,
-                                             fixtureLength, fixtureWidth);
+    // Overhead fixture strips — warm golden, aimed downward.
+    // Reflections in the polished floor appear as three parallel strips.
+    {
+        const Color  fixtureColor(0xffe0a0);
+        const float  intensity  = 20.0f;
+        const float  length     = 3.2f;
+        const float  width      = 0.12f;
+        const float  y          = 3.0f;
+        const float  zPos[]     = { -0.9f, 0.0f, 0.9f };
+
+        for (float z : zPos) {
+            auto fix = RectAreaLight::create(fixtureColor, intensity, length, width);
             fix->rotation.x = -math::PI / 2.0f;  // face downward
-            fix->position.set(0.0f, fixtureY, z);
+            fix->position.set(0.0f, y, z);
             ss.scene->add(fix);
         }
     }
 
-    // Dim warm fill so the void isn't absolute black.
-    ss.scene->add(AmbientLight::create(Color(0x3a2010), 0.25f));
-
-    // Floor — polished epoxy: low roughness so fixtures show as strips.
+    // Floor — warm polished concrete: bright base colour, low roughness so
+    // fixture strips are visible as clean reflections.
     {
         auto geo = PlaneGeometry::create(60.0f, 60.0f);
         auto mat = MeshStandardMaterial::create();
-        mat->color     = Color(0xd0c8b8);
-        mat->roughness = 0.12f;
+        mat->color     = Color(0xe8dfd0);
+        mat->roughness = 0.15f;
         mat->metalness = 0.0f;
         auto floor = Mesh::create(geo, mat);
         floor->rotation.x    = -math::PI / 2.f;
@@ -89,9 +90,8 @@ int main() {
     ss.scene->add(fenceGrp);
 
     ss.canvas.animate([&] {
-        // FogExp2 must be set each frame for the path tracer to pick it up.
-        ss.scene->fog = FogExp2(Color(0x080604), 0.07f);
-        pt.setFogAnisotropy(0.0f);
+        // Fog dissolves into the bright background — warm haze, not dark void.
+        ss.scene->fog = FogExp2(Color(0xfff6e8), 0.06f);
         ss.renderer.render(*ss.scene, *ss.camera);
     });
 

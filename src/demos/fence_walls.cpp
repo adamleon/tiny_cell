@@ -236,6 +236,26 @@ struct Interactor : MouseListener, KeyListener {
         for (auto& pb : pickBoxes) pb.mesh->visible = pickBoxesVisible;
     }
 
+    // Clamp an opening center position (mm from node_a) so it never leaves the edge
+    // and is never in the dead zone (0 < span < min_panel on either side).
+    // Snaps to the nearest valid boundary: corner (no span) or minimum span.
+    static float clampOpeningPos(float pos_mm, float len_mm, float half_w,
+                                 float post_w, float min_panel) {
+        float cl = half_w + post_w;           // left corner: no left span
+        float cr = len_mm - half_w - post_w;  // right corner: no right span
+        if (cr <= cl) return (cl + cr) * 0.5f;
+        pos_mm = std::max(cl, std::min(cr, pos_mm));
+        float vl = cl + min_panel;            // leftmost position with valid left span
+        float vr = cr - min_panel;            // rightmost position with valid right span
+        if (vl < vr) {
+            if (pos_mm > cl && pos_mm < vl)
+                pos_mm = (pos_mm - cl < vl - pos_mm) ? cl : vl;
+            if (pos_mm > vr && pos_mm < cr)
+                pos_mm = (cr - pos_mm < pos_mm - vr) ? cr : vr;
+        }
+        return pos_mm;
+    }
+
     std::shared_ptr<Mesh> makeWallBox(float ax, float az, float bx, float bz,
                                       const Color& col, float opacity = 0.55f) {
         float dx = bx - ax, dz = bz - az;
@@ -266,23 +286,25 @@ struct Interactor : MouseListener, KeyListener {
             float dp = (wx - drag.startX) * drag.perpX + (wz - drag.startZ) * drag.perpZ;
             auto [naX, naZ, nbX, nbZ] = computeEdgeDrag(dp);
 
-            overlayGrp->add(makeWallBox(naX, naZ, nbX, nbZ, Color(0xffe090)));
-
+            // Adjacent edges follow the moving corners — shown as boxes.
+            // Non-adjacent edges stay as real fence mesh (fenceGrp visible).
             reg.view<factory::EdgeComponent>().each(
                 [&](entt::entity e, const factory::EdgeComponent& ec) {
                     if (e == drag.entity) return;
-                    entt::entity shared = entt::null, fixed = entt::null;
-                    if      (ec.node_a == drag.nodeA || ec.node_a == drag.nodeB)
-                        { shared = ec.node_a; fixed = ec.node_b; }
-                    else if (ec.node_b == drag.nodeA || ec.node_b == drag.nodeB)
-                        { shared = ec.node_b; fixed = ec.node_a; }
-                    else return;
-                    const auto& fp = reg.get<factory::PoseComponent>(fixed);
-                    float fx = fp.position.x * 0.001f, fz = fp.position.y * 0.001f;
-                    float sx = (shared == drag.nodeA) ? naX : nbX;
-                    float sz = (shared == drag.nodeA) ? naZ : nbZ;
-                    overlayGrp->add(makeWallBox(fx, fz, sx, sz, Color(0xffd060), 0.45f));
+                    bool adj_a = (ec.node_a == drag.nodeA || ec.node_b == drag.nodeA);
+                    bool adj_b = (ec.node_a == drag.nodeB || ec.node_b == drag.nodeB);
+                    if (adj_a || adj_b) {
+                        entt::entity shared = adj_a ? drag.nodeA : drag.nodeB;
+                        entt::entity fixed  = (ec.node_a == shared) ? ec.node_b : ec.node_a;
+                        const auto& fp = reg.get<factory::PoseComponent>(fixed);
+                        float fx = fp.position.x * 0.001f, fz = fp.position.y * 0.001f;
+                        float sx = (shared == drag.nodeA) ? naX : nbX;
+                        float sz = (shared == drag.nodeA) ? naZ : nbZ;
+                        overlayGrp->add(makeWallBox(fx, fz, sx, sz, Color(0xffd060), 0.45f));
+                    }
                 });
+            // Dragged edge follows the cursor
+            overlayGrp->add(makeWallBox(naX, naZ, nbX, nbZ, Color(0xffe090)));
 
         } else if (drag.type == Drag::Type::Opening) {
             const auto& oc = reg.get<factory::DeclaredOpeningComponent>(drag.entity);
@@ -293,8 +315,17 @@ struct Interactor : MouseListener, KeyListener {
             float dx = pb.position.x - pa.position.x;
             float dz = pb.position.y - pa.position.y;
             float len = std::hypot(dx, dz);
-            float da  = (wx - drag.startX) * drag.edgeDirX + (wz - drag.startZ) * drag.edgeDirZ;
-            float lx  = drag.openingLocalX * 0.001f + da;
+
+            // Other edges stay as real fence mesh — only show the slab moving.
+            float da     = (wx - drag.startX) * drag.edgeDirX + (wz - drag.startZ) * drag.edgeDirZ;
+            float lx_mm  = drag.openingLocalX + da * 1000.f;
+            float pos_mm = len * 0.5f + lx_mm;
+            pos_mm = clampOpeningPos(pos_mm, len,
+                                     oc.width_mm * 0.5f,
+                                     static_cast<float>(table.post_width_mm),
+                                     static_cast<float>(table.entries.begin()->first));
+            lx_mm = pos_mm - len * 0.5f;
+            float lx = lx_mm * 0.001f;
             float ox  = ep.position.x * 0.001f + lx * (dx / len);
             float oz  = ep.position.y * 0.001f + lx * (dz / len);
             float oh  = protos.edge_height_mm * 0.001f;
@@ -359,7 +390,6 @@ struct Interactor : MouseListener, KeyListener {
             drag.startX        = wx;  drag.startZ       = wz;
             drag.edgeDirX      = dx / len; drag.edgeDirZ  = dz / len;
             drag.openingLocalX = reg.get<factory::PoseComponent>(pb.entity).position.x;
-            fenceGrp->visible  = false;
             controls.enabled   = false;
             return;
         }
@@ -390,7 +420,6 @@ struct Interactor : MouseListener, KeyListener {
                 if (cb) { drag.cornerBX = cb->first; drag.cornerBZ = cb->second; }
             }
 
-            fenceGrp->visible = false;
             controls.enabled  = false;
         }
     }
@@ -418,11 +447,28 @@ struct Interactor : MouseListener, KeyListener {
                 auto& pb = reg.get<factory::PoseComponent>(drag.nodeB);
                 pa.position.x = naX * 1000.f; pa.position.y = naZ * 1000.f;
                 pb.position.x = nbX * 1000.f; pb.position.y = nbZ * 1000.f;
+
                 scene.solve(table, assetDir);
 
             } else if (drag.type == Drag::Type::Opening) {
-                auto& oc = reg.get<factory::DeclaredOpeningComponent>(drag.entity);
-                oc.parent_edge = entt::null;
+                auto& oc  = reg.get<factory::DeclaredOpeningComponent>(drag.entity);
+                const auto& ec   = reg.get<factory::EdgeComponent>(oc.parent_edge);
+                const auto& pa2  = reg.get<factory::PoseComponent>(ec.node_a);
+                const auto& pb2  = reg.get<factory::PoseComponent>(ec.node_b);
+                float dx_mm = pb2.position.x - pa2.position.x;
+                float dz_mm = pb2.position.y - pa2.position.y;
+                float len_mm = std::hypot(dx_mm, dz_mm);
+
+                float da    = (wx - drag.startX) * drag.edgeDirX + (wz - drag.startZ) * drag.edgeDirZ;
+                float lx_mm = drag.openingLocalX + da * 1000.f;
+                float pos   = len_mm * 0.5f + lx_mm;
+                pos = clampOpeningPos(pos, len_mm,
+                                      oc.width_mm * 0.5f,
+                                      static_cast<float>(table.post_width_mm),
+                                      static_cast<float>(table.entries.begin()->first));
+
+                oc.hint_edge_index     = scene.edge_polygon_index(oc.parent_edge);
+                oc.desired_position_mm = static_cast<int>(std::round(pos));
                 scene.solve(table, assetDir);
             }
 
@@ -430,7 +476,6 @@ struct Interactor : MouseListener, KeyListener {
         }
 
         overlayGrp->clear();
-        fenceGrp->visible = true;
         drag = Drag{};
         controls.enabled = true;
     }

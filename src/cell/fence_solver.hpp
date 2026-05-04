@@ -47,6 +47,7 @@ inline LookupResult lookup(const LookupTable& table, int target_mm, bool prefer_
 // For desired lengths > max_lookup (2100mm), prepend 1000mm panels greedily,
 // then look up the remainder. Result is sorted largest-first.
 inline LookupResult solve(const LookupTable& table, int desired_mm, bool prefer_over) {
+    if (desired_mm <= 0) return {0, {}};
     std::vector<int> prefix;
     const int post_w = table.post_width_mm;
     while (desired_mm > 2100) {

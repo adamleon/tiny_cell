@@ -91,8 +91,10 @@ public:
         }
         for (const auto& [sid, e] : id_map_) {
             if (sid == kSceneEntityId) continue;
-            if (const auto* oc = registry_.try_get<DeclaredOpeningComponent>(e)) {
-                if (oc->parent_edge != entt::null) continue;  // already placed
+            if (auto* oc = registry_.try_get<DeclaredOpeningComponent>(e)) {
+                // Reset every time so apply() re-allocates from fresh solver output.
+                // hint_edge_index and desired_position_mm preserve user intent across solves.
+                oc->parent_edge = entt::null;
                 if (oc->hint_edge_index >= 0 && oc->desired_position_mm.has_value()) {
                     in.anchored_openings.push_back({
                         sid, oc->width_mm,
@@ -165,6 +167,23 @@ public:
                 op_pose.parent      = e;
             }
         }
+    }
+
+    // Returns the polygon ring index of an edge entity (edge i connects node[i] → node[i+1]).
+    // Returns -1 if the entity is not a known edge.
+    int edge_polygon_index(entt::entity edge_e) const {
+        const auto* ec = registry_.try_get<EdgeComponent>(edge_e);
+        if (!ec) return -1;
+        int n = static_cast<int>(node_order_.size());
+        for (int i = 0; i < n; ++i) {
+            auto it_a = id_map_.find(node_order_[i]);
+            auto it_b = id_map_.find(node_order_[(i + 1) % n]);
+            if (it_a == id_map_.end() || it_b == id_map_.end()) continue;
+            if ((ec->node_a == it_a->second && ec->node_b == it_b->second) ||
+                (ec->node_a == it_b->second && ec->node_b == it_a->second))
+                return i;
+        }
+        return -1;
     }
 
     // Translate a solver EntityId to its entt::entity. Returns entt::null if unknown.

@@ -76,15 +76,20 @@ inline SolverOutput solve(const SolverInput& input, const LookupTable& table) {
             // Layer 3b: anchored openings at specified positions on this edge
             int cursor = 0;
             for (const auto* aop : edge_ops[i]) {
-                int span_desired = aop->position_mm - aop->width_mm / 2 - post_w - cursor;
+                // Clamp so flanking spans are non-negative (handles short edges or user drags)
+                int min_center = cursor + aop->width_mm / 2 + post_w;
+                int max_center = desired - aop->width_mm / 2 - post_w;
+                int pos = std::max(min_center, std::min(max_center, aop->position_mm));
+
+                int span_desired = pos - aop->width_mm / 2 - post_w - cursor;
                 auto result = ::solve(table, span_desired, /*prefer_over=*/true);
                 edge.spans_mm.push_back(result.panels_mm);
-                cursor = aop->position_mm + aop->width_mm / 2 + post_w;
+                cursor = pos + aop->width_mm / 2 + post_w;
 
                 OpeningOut op;
                 op.entity_id   = assign(aop->entity_id);
                 op.edge_id     = edge.entity_id;
-                op.position_mm = aop->position_mm;
+                op.position_mm = pos;
                 op.width_mm    = aop->width_mm;
                 edge.openings.push_back(op);
             }

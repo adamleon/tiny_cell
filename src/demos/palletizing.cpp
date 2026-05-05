@@ -96,7 +96,8 @@ int main() {
         mat->roughness = 0.5f;
         mat->metalness = 0.f;
         auto floor = Mesh::create(geo, mat);
-        floor->rotation.x = -math::PI / 2.f;
+        floor->rotation.x  = -math::PI / 2.f;
+        floor->position.y  = -0.001f;
         floor->receiveShadow = true;
         ss.scene->add(floor);
     }

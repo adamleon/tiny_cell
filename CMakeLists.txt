@@ -6,9 +6,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(FetchContent)
 
+option(TINYCELL_BUILD_DEMOS "Build demo executables (requires WGPU + X11)" ON)
+
 set(THREEPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(THREEPP_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(THREEPP_WITH_WGPU ON CACHE BOOL "" FORCE)
+if(TINYCELL_BUILD_DEMOS)
+    set(THREEPP_WITH_WGPU ON CACHE BOOL "" FORCE)
+endif()
 
 FetchContent_Declare(
     threepp
@@ -51,8 +55,10 @@ function(add_demo name)
 endfunction()
 
 # ── Demos ─────────────────────────────────────────────────────────────────────
-add_demo(fence_walls)
-add_demo(palletizing)
+if(TINYCELL_BUILD_DEMOS)
+    add_demo(fence_walls)
+    add_demo(palletizing)
+endif()
 
 # ── Generator tool (no threepp, just nlohmann/json) ───────────────────────────
 add_executable(GenLookup src/tools/gen_lookup.cpp)
@@ -69,7 +75,7 @@ target_include_directories(TestCell PRIVATE
     src
     ${threepp_SOURCE_DIR}/src/external/nlohmann
 )
-target_compile_options(TestCell PRIVATE -Wall -Wextra)
+target_compile_options(TestCell PRIVATE -Wall -Wextra -Werror)
 
 add_test(NAME cell_tests
     COMMAND TestCell
@@ -81,7 +87,7 @@ target_include_directories(TestSolver PRIVATE
     src
     ${threepp_SOURCE_DIR}/src/external/nlohmann
 )
-target_compile_options(TestSolver PRIVATE -Wall -Wextra)
+target_compile_options(TestSolver PRIVATE -Wall -Wextra -Werror)
 
 add_test(NAME solver_tests
     COMMAND TestSolver
@@ -94,7 +100,7 @@ target_include_directories(TestFactoryScene PRIVATE
     src
     ${threepp_SOURCE_DIR}/src/external/nlohmann
 )
-target_compile_options(TestFactoryScene PRIVATE -Wall -Wextra)
+target_compile_options(TestFactoryScene PRIVATE -Wall -Wextra -Werror)
 
 add_test(NAME factory_scene_tests
     COMMAND TestFactoryScene
@@ -107,7 +113,7 @@ target_include_directories(TestSim PRIVATE
     src
     ${threepp_SOURCE_DIR}/src/external/nlohmann
 )
-target_compile_options(TestSim PRIVATE -Wall -Wextra)
+target_compile_options(TestSim PRIVATE -Wall -Wextra -Werror)
 
 add_test(NAME sim_tests
     COMMAND TestSim

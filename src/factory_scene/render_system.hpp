@@ -78,8 +78,8 @@ inline std::shared_ptr<threepp::Object3D> buildScene(
                     const factory::DeclaredOpeningComponent& oc,
                     const factory::PoseComponent& op)
                 {
-                    if (oc.parent_edge == edge_e)
-                        ops.push_back({op.position.x, oc.width_mm});
+                    if (oc.parent_edge() == edge_e)
+                        ops.push_back({op.position.x, oc.width_mm()});
                 });
             std::sort(ops.begin(), ops.end(),
                       [](const OpInfo& a, const OpInfo& b) { return a.local_x < b.local_x; });
@@ -87,15 +87,15 @@ inline std::shared_ptr<threepp::Object3D> buildScene(
             const float pw_m = protos.post_width_mm * 0.001f;
             const float hw_m = pw_m * 0.5f;
             int total_mm = 0;
-            for (const auto& s : ec.spans_mm) total_mm += detail::spanVisualMm(s);
+            for (const auto& s : ec.spans_mm()) total_mm += detail::spanVisualMm(s);
             for (const auto& op : ops) total_mm += op.width_mm + 2 * protos.post_width_mm;
 
             float cursor = -total_mm * 0.0005f;
             auto grp = Group::create();
 
-            const int n_spans = static_cast<int>(ec.spans_mm.size());
+            const int n_spans = static_cast<int>(ec.spans_mm().size());
             for (int i = 0; i < n_spans; ++i) {
-                const auto& span = ec.spans_mm[i];
+                const auto& span = ec.spans_mm()[i];
                 const int   np   = static_cast<int>(span.size());
                 for (int j = 0; j < np; ++j) {
                     float w_m = span[j] * 0.001f;
@@ -162,8 +162,8 @@ inline std::shared_ptr<threepp::Object3D> buildScene(
                 grp->add(strip);
             }
 
-            const auto& pa  = reg.get<factory::PoseComponent>(ec.node_a);
-            const auto& pb  = reg.get<factory::PoseComponent>(ec.node_b);
+            const auto& pa  = reg.get<factory::PoseComponent>(ec.node_a());
+            const auto& pb  = reg.get<factory::PoseComponent>(ec.node_b());
             float yaw = std::atan2(pb.position.y - pa.position.y,
                                    pb.position.x - pa.position.x);
             grp->position.set(ep.position.x * 0.001f, 0.f, ep.position.y * 0.001f);

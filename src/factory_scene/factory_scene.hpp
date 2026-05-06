@@ -44,12 +44,12 @@ public:
 
     // Place a corner node on the factory floor (Z-up, mm).
     // Nodes are recorded in insertion order — that order defines the polygon for the solver.
-    entt::entity place_node(float x_mm, float z_mm) {
+    entt::entity place_node(float x_mm, float y_mm) {
         auto id = next_id_++;
         node_order_.push_back(id);
         auto e        = get_or_create(id);
         auto& pose    = registry_.emplace_or_replace<PoseComponent>(e);
-        pose.position = Vec3{x_mm, z_mm, 0.f};
+        pose.position = Vec3{x_mm, y_mm, 0.f};
         pose.parent   = id_map_.at(kSceneEntityId);
         registry_.emplace_or_replace<NodeComponent>(e);
         return e;
@@ -61,7 +61,7 @@ public:
         auto id    = next_id_++;
         auto e     = get_or_create(id);
         auto& oc   = registry_.emplace_or_replace<DeclaredOpeningComponent>(e);
-        oc.width_mm = width_mm;
+        oc.set_width_mm(width_mm);
         // parent_edge stays entt::null — unallocated
         return e;
     }
@@ -73,9 +73,9 @@ public:
         auto id  = next_id_++;
         auto e   = get_or_create(id);
         auto& oc = registry_.emplace_or_replace<DeclaredOpeningComponent>(e);
-        oc.width_mm            = width_mm;
-        oc.desired_position_mm = position_mm;
-        oc.hint_edge_index     = edge_index;
+        oc.set_width_mm(width_mm);
+        oc.set_desired_position_mm(position_mm);
+        oc.set_hint_edge_index(edge_index);
         // parent_edge stays entt::null until solve() runs
         return e;
     }
@@ -94,14 +94,14 @@ public:
             if (auto* oc = registry_.try_get<DeclaredOpeningComponent>(e)) {
                 // Reset every time so apply() re-allocates from fresh solver output.
                 // hint_edge_index and desired_position_mm preserve user intent across solves.
-                oc->parent_edge = entt::null;
-                if (oc->hint_edge_index >= 0 && oc->desired_position_mm.has_value()) {
+                oc->set_parent_edge(entt::null);
+                if (oc->hint_edge_index() >= 0 && oc->desired_position_mm().has_value()) {
                     in.anchored_openings.push_back({
-                        sid, oc->width_mm,
-                        oc->hint_edge_index, *oc->desired_position_mm
+                        sid, oc->width_mm(),
+                        oc->hint_edge_index(), *oc->desired_position_mm()
                     });
                 } else {
-                    in.unallocated_openings.push_back({sid, oc->width_mm});
+                    in.unallocated_openings.push_back({sid, oc->width_mm()});
                 }
             }
         }
@@ -122,7 +122,7 @@ public:
         // Nodes first — edges need their PoseComponents to compute midpoints.
         for (const auto& n : output.nodes) {
             auto e  = get_or_create(n.entity_id);
-            registry_.emplace_or_replace<NodeComponent>(e).type = n.type;
+            registry_.emplace_or_replace<NodeComponent>(e).set_type(n.type);
 
             // Nodes lie on the factory floor (z = 0).
             // Solver x_mm/z_mm map to Vec3 x/y in the Z-up floor plane.
@@ -133,15 +133,15 @@ public:
 
         for (const auto& edge : output.edges) {
             auto e  = get_or_create(edge.entity_id);
-            auto& ec       = registry_.emplace_or_replace<EdgeComponent>(e);
-            ec.node_a      = get_or_create(edge.node_a_id);
-            ec.node_b      = get_or_create(edge.node_b_id);
-            ec.spans_mm    = edge.spans_mm;
-            ec.catalog_ref = edge.catalog_ref;
+            auto& ec = registry_.emplace_or_replace<EdgeComponent>(e);
+            ec.set_node_a(get_or_create(edge.node_a_id));
+            ec.set_node_b(get_or_create(edge.node_b_id));
+            ec.set_spans_mm(edge.spans_mm);
+            ec.set_catalog_ref(edge.catalog_ref);
 
             // Edge pose: origin at midpoint, x-axis along the edge direction.
-            const auto& pa = registry_.get<PoseComponent>(ec.node_a);
-            const auto& pb = registry_.get<PoseComponent>(ec.node_b);
+            const auto& pa = registry_.get<PoseComponent>(ec.node_a());
+            const auto& pb = registry_.get<PoseComponent>(ec.node_b());
             Vec3  dir      = pb.position - pa.position;
             float len      = glm::length(dir);
             Vec3  dnorm    = (len > 0.f) ? dir / len : Vec3{1.f, 0.f, 0.f};
@@ -155,8 +155,8 @@ public:
             for (const auto& op : edge.openings) {
                 auto oe  = get_or_create(op.entity_id);
                 auto& oc = registry_.emplace_or_replace<DeclaredOpeningComponent>(oe);
-                oc.parent_edge = e;
-                oc.width_mm    = op.width_mm;
+                oc.set_parent_edge(e);
+                oc.set_width_mm(op.width_mm);
                 // desired_position_mm stays absent: solver-assigned, not yet anchored.
 
                 // Local x in edge frame: op.position_mm from node_a; edge origin is midpoint.
@@ -179,8 +179,8 @@ public:
             auto it_a = id_map_.find(node_order_[i]);
             auto it_b = id_map_.find(node_order_[(i + 1) % n]);
             if (it_a == id_map_.end() || it_b == id_map_.end()) continue;
-            if ((ec->node_a == it_a->second && ec->node_b == it_b->second) ||
-                (ec->node_a == it_b->second && ec->node_b == it_a->second))
+            if ((ec->node_a() == it_a->second && ec->node_b() == it_b->second) ||
+                (ec->node_a() == it_b->second && ec->node_b() == it_a->second))
                 return i;
         }
         return -1;
@@ -198,6 +198,82 @@ public:
     const solver::SolverOutput& current_layout() const { return current_layout_; }
     entt::registry&             registry()              { return registry_; }
     const entt::registry&       registry()        const { return registry_; }
+
+    // ── Transport / workflow ──────────────────────────────────────────────────
+
+    entt::entity add_belt(int width_mm, int length_mm, int surface_height_mm,
+                          float speed_mm_s, Vec3 dir, int capacity = 0) {
+        auto e   = registry_.create();
+        auto& bc = registry_.emplace<ConveyorBeltComponent>(e);
+        bc.set_width_mm(width_mm);
+        bc.set_length_mm(length_mm);
+        bc.set_surface_height_mm(surface_height_mm);
+        bc.set_belt_speed_mm_s(speed_mm_s);
+        bc.set_dir(dir);
+        registry_.emplace<TransportComponent>(e).set_capacity(capacity);
+        return e;
+    }
+
+    // Count items currently on a transport. Used to enforce capacity at placement.
+    int items_on(entt::entity transport) const {
+        int n = 0;
+        registry_.view<ItemOnTransportComponent>().each(
+            [&](const ItemOnTransportComponent& it) {
+                if (it.transport() == transport) ++n;
+            });
+        return n;
+    }
+
+    bool transport_has_capacity(entt::entity transport) const {
+        const auto* tc = registry_.try_get<TransportComponent>(transport);
+        if (!tc || !tc->running()) return false;
+        return tc->capacity() == 0 || items_on(transport) < tc->capacity();
+    }
+
+    entt::entity add_port(const std::string& name, PortDirection direction, Vec3 position) {
+        auto e   = registry_.create();
+        auto& pc = registry_.emplace<PortComponent>(e);
+        pc.set_name(name);
+        pc.set_direction(direction);
+        auto& pose   = registry_.emplace<PoseComponent>(e);
+        pose.position = position;
+        return e;
+    }
+
+    void connect_belt(entt::entity belt, entt::entity entry_port, entt::entity exit_port) {
+        auto& bc = registry_.get<ConveyorBeltComponent>(belt);
+        bc.set_entry_port(entry_port);
+        bc.set_exit_port(exit_port);
+    }
+
+    void set_port_transport(entt::entity port, entt::entity transport) {
+        registry_.get<PortComponent>(port).set_transport(transport);
+    }
+
+    entt::entity add_prototype(int length_mm, int width_mm, int height_mm, uint32_t color_hex) {
+        auto e  = registry_.create();
+        auto& p = registry_.emplace<ItemPrototypeComponent>(e);
+        p.set_length_mm(length_mm);
+        p.set_width_mm(width_mm);
+        p.set_height_mm(height_mm);
+        p.set_color_hex(color_hex);
+        return e;
+    }
+
+    entt::entity add_source(float rate_per_hour, entt::entity prototype, entt::entity out_port) {
+        auto e   = registry_.create();
+        auto& sc = registry_.emplace<SourceComponent>(e);
+        sc.set_rate_per_hour(rate_per_hour);
+        sc.set_prototype(prototype);
+        sc.set_out_port(out_port);
+        return e;
+    }
+
+    entt::entity add_sink(entt::entity exit_port) {
+        auto e   = registry_.create();
+        registry_.emplace<SinkComponent>(e).set_in_port(exit_port);
+        return e;
+    }
 };
 
 }  // namespace factory

@@ -126,7 +126,7 @@ inline BeltMesh buildBeltMesh(
         auto geo  = PlaneGeometry::create(len, w);
         auto mesh = Mesh::create(geo, belt_mat);
         mesh->rotation.x    = -PI / 2.0f;  // lie flat in XZ plane
-        mesh->position.set(0.f, sh + fso * 0.001f, 0.f);
+        mesh->position.set(0.f, sh + fso, 0.f);
         mesh->receiveShadow = true;
         root->add(mesh);
     }

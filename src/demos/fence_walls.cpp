@@ -123,9 +123,9 @@ struct Interactor : MouseListener, KeyListener {
         reg.view<factory::EdgeComponent>().each(
             [&](entt::entity e, const factory::EdgeComponent& ec) {
                 if (e == draggedEdge || multiple) return;
-                if (ec.node_a == node || ec.node_b == node) {
+                if (ec.node_a() == node || ec.node_b() == node) {
                     if (result.has_value()) { multiple = true; return; }
-                    entt::entity far = (ec.node_a == node) ? ec.node_b : ec.node_a;
+                    entt::entity far = (ec.node_a() == node) ? ec.node_b() : ec.node_a();
                     const auto& fp = reg.get<factory::PoseComponent>(far);
                     result = { fp.position.x * 0.001f, fp.position.y * 0.001f };
                 }
@@ -178,8 +178,8 @@ struct Interactor : MouseListener, KeyListener {
 
         reg.view<factory::EdgeComponent, factory::PoseComponent>().each(
             [&](entt::entity e, const factory::EdgeComponent& ec, const factory::PoseComponent&) {
-                const auto& pa = reg.get<factory::PoseComponent>(ec.node_a);
-                const auto& pb = reg.get<factory::PoseComponent>(ec.node_b);
+                const auto& pa = reg.get<factory::PoseComponent>(ec.node_a());
+                const auto& pb = reg.get<factory::PoseComponent>(ec.node_b());
                 float ax = pa.position.x * 0.001f, az = pa.position.y * 0.001f;
                 float bx = pb.position.x * 0.001f, bz = pb.position.y * 0.001f;
                 float len = std::max(0.01f, std::hypot(bx - ax, bz - az));
@@ -202,11 +202,11 @@ struct Interactor : MouseListener, KeyListener {
         reg.view<factory::DeclaredOpeningComponent, factory::PoseComponent>().each(
             [&](entt::entity e, const factory::DeclaredOpeningComponent& oc,
                 const factory::PoseComponent& op) {
-                if (oc.parent_edge == entt::null) return;
-                const auto& ep  = reg.get<factory::PoseComponent>(oc.parent_edge);
-                const auto& ec  = reg.get<factory::EdgeComponent>(oc.parent_edge);
-                const auto& pa  = reg.get<factory::PoseComponent>(ec.node_a);
-                const auto& pb  = reg.get<factory::PoseComponent>(ec.node_b);
+                if (oc.parent_edge() == entt::null) return;
+                const auto& ep  = reg.get<factory::PoseComponent>(oc.parent_edge());
+                const auto& ec  = reg.get<factory::EdgeComponent>(oc.parent_edge());
+                const auto& pa  = reg.get<factory::PoseComponent>(ec.node_a());
+                const auto& pb  = reg.get<factory::PoseComponent>(ec.node_b());
                 float dx = pb.position.x - pa.position.x;
                 float dz = pb.position.y - pa.position.y;
                 float elen = std::hypot(dx, dz);
@@ -218,7 +218,7 @@ struct Interactor : MouseListener, KeyListener {
 
                 auto mat = MeshStandardMaterial::create();
                 mat->color = pickColor(1); mat->transparent = true; mat->opacity = 0.4f;
-                auto box = Mesh::create(BoxGeometry::create(oc.width_mm * 0.001f, fh, 0.10f), mat);
+                auto box = Mesh::create(BoxGeometry::create(oc.width_mm() * 0.001f, fh, 0.10f), mat);
                 box->position.set(ox, fh * 0.5f, oz);
                 box->rotation.y    = -yaw;
                 box->castShadow    = box->receiveShadow = false;
@@ -291,11 +291,11 @@ struct Interactor : MouseListener, KeyListener {
             reg.view<factory::EdgeComponent>().each(
                 [&](entt::entity e, const factory::EdgeComponent& ec) {
                     if (e == drag.entity) return;
-                    bool adj_a = (ec.node_a == drag.nodeA || ec.node_b == drag.nodeA);
-                    bool adj_b = (ec.node_a == drag.nodeB || ec.node_b == drag.nodeB);
+                    bool adj_a = (ec.node_a() == drag.nodeA || ec.node_b() == drag.nodeA);
+                    bool adj_b = (ec.node_a() == drag.nodeB || ec.node_b() == drag.nodeB);
                     if (adj_a || adj_b) {
                         entt::entity shared = adj_a ? drag.nodeA : drag.nodeB;
-                        entt::entity fixed  = (ec.node_a == shared) ? ec.node_b : ec.node_a;
+                        entt::entity fixed  = (ec.node_a() == shared) ? ec.node_b() : ec.node_a();
                         const auto& fp = reg.get<factory::PoseComponent>(fixed);
                         float fx = fp.position.x * 0.001f, fz = fp.position.y * 0.001f;
                         float sx = (shared == drag.nodeA) ? naX : nbX;
@@ -308,10 +308,10 @@ struct Interactor : MouseListener, KeyListener {
 
         } else if (drag.type == Drag::Type::Opening) {
             const auto& oc = reg.get<factory::DeclaredOpeningComponent>(drag.entity);
-            const auto& ec = reg.get<factory::EdgeComponent>(oc.parent_edge);
-            const auto& ep = reg.get<factory::PoseComponent>(oc.parent_edge);
-            const auto& pa = reg.get<factory::PoseComponent>(ec.node_a);
-            const auto& pb = reg.get<factory::PoseComponent>(ec.node_b);
+            const auto& ec = reg.get<factory::EdgeComponent>(oc.parent_edge());
+            const auto& ep = reg.get<factory::PoseComponent>(oc.parent_edge());
+            const auto& pa = reg.get<factory::PoseComponent>(ec.node_a());
+            const auto& pb = reg.get<factory::PoseComponent>(ec.node_b());
             float dx = pb.position.x - pa.position.x;
             float dz = pb.position.y - pa.position.y;
             float len = std::hypot(dx, dz);
@@ -321,7 +321,7 @@ struct Interactor : MouseListener, KeyListener {
             float lx_mm  = drag.openingLocalX + da * 1000.f;
             float pos_mm = len * 0.5f + lx_mm;
             pos_mm = clampOpeningPos(pos_mm, len,
-                                     oc.width_mm * 0.5f,
+                                     oc.width_mm() * 0.5f,
                                      static_cast<float>(table.post_width_mm),
                                      static_cast<float>(table.entries.begin()->first));
             lx_mm = pos_mm - len * 0.5f;
@@ -331,7 +331,7 @@ struct Interactor : MouseListener, KeyListener {
             float oh  = protos.edge_height_mm * 0.001f;
             auto mat  = MeshStandardMaterial::create();
             mat->color = Color(0xffa050); mat->transparent = true; mat->opacity = 0.7f;
-            auto box = Mesh::create(BoxGeometry::create(oc.width_mm * 0.001f, oh, 0.07f), mat);
+            auto box = Mesh::create(BoxGeometry::create(oc.width_mm() * 0.001f, oh, 0.07f), mat);
             box->position.set(ox, oh * 0.5f, oz);
             box->rotation.y = -std::atan2(dz, dx);
             overlayGrp->add(box);
@@ -379,9 +379,9 @@ struct Interactor : MouseListener, KeyListener {
 
         if (pb.dragType == Drag::Type::Opening) {
             const auto& oc = reg.get<factory::DeclaredOpeningComponent>(pb.entity);
-            const auto& ec = reg.get<factory::EdgeComponent>(oc.parent_edge);
-            const auto& pa = reg.get<factory::PoseComponent>(ec.node_a);
-            const auto& pb2 = reg.get<factory::PoseComponent>(ec.node_b);
+            const auto& ec = reg.get<factory::EdgeComponent>(oc.parent_edge());
+            const auto& pa = reg.get<factory::PoseComponent>(ec.node_a());
+            const auto& pb2 = reg.get<factory::PoseComponent>(ec.node_b());
             float dx = pb2.position.x - pa.position.x;
             float dz = pb2.position.y - pa.position.y;
             float len = std::hypot(dx, dz);
@@ -396,8 +396,8 @@ struct Interactor : MouseListener, KeyListener {
 
         if (pb.dragType == Drag::Type::Edge) {
             const auto& ec  = reg.get<factory::EdgeComponent>(pb.entity);
-            const auto& pa  = reg.get<factory::PoseComponent>(ec.node_a);
-            const auto& pb2 = reg.get<factory::PoseComponent>(ec.node_b);
+            const auto& pa  = reg.get<factory::PoseComponent>(ec.node_a());
+            const auto& pb2 = reg.get<factory::PoseComponent>(ec.node_b());
             float dx = pb2.position.x - pa.position.x;
             float dz = pb2.position.y - pa.position.y;
             float len = std::hypot(dx, dz);
@@ -406,14 +406,14 @@ struct Interactor : MouseListener, KeyListener {
             drag.startX  = wx;  drag.startZ = wz;
             drag.perpX   = -dz / len; drag.perpZ = dx / len;
             drag.edgeDirX = dx / len; drag.edgeDirZ = dz / len;
-            drag.nodeA   = ec.node_a;  drag.nodeB = ec.node_b;
+            drag.nodeA   = ec.node_a();  drag.nodeB = ec.node_b();
             drag.na_x    = pa.position.x; drag.na_z = pa.position.y;
             drag.nb_x    = pb2.position.x; drag.nb_z = pb2.position.y;
 
             drag.anglePreserving = shiftDown;
             if (drag.anglePreserving) {
-                auto ca = findAdjacentCorner(ec.node_a, pb.entity);
-                auto cb = findAdjacentCorner(ec.node_b, pb.entity);
+                auto ca = findAdjacentCorner(ec.node_a(), pb.entity);
+                auto cb = findAdjacentCorner(ec.node_b(), pb.entity);
                 drag.hasCornerA = ca.has_value();
                 drag.hasCornerB = cb.has_value();
                 if (ca) { drag.cornerAX = ca->first; drag.cornerAZ = ca->second; }
@@ -452,9 +452,9 @@ struct Interactor : MouseListener, KeyListener {
 
             } else if (drag.type == Drag::Type::Opening) {
                 auto& oc  = reg.get<factory::DeclaredOpeningComponent>(drag.entity);
-                const auto& ec   = reg.get<factory::EdgeComponent>(oc.parent_edge);
-                const auto& pa2  = reg.get<factory::PoseComponent>(ec.node_a);
-                const auto& pb2  = reg.get<factory::PoseComponent>(ec.node_b);
+                const auto& ec   = reg.get<factory::EdgeComponent>(oc.parent_edge());
+                const auto& pa2  = reg.get<factory::PoseComponent>(ec.node_a());
+                const auto& pb2  = reg.get<factory::PoseComponent>(ec.node_b());
                 float dx_mm = pb2.position.x - pa2.position.x;
                 float dz_mm = pb2.position.y - pa2.position.y;
                 float len_mm = std::hypot(dx_mm, dz_mm);
@@ -463,12 +463,12 @@ struct Interactor : MouseListener, KeyListener {
                 float lx_mm = drag.openingLocalX + da * 1000.f;
                 float pos   = len_mm * 0.5f + lx_mm;
                 pos = clampOpeningPos(pos, len_mm,
-                                      oc.width_mm * 0.5f,
+                                      oc.width_mm() * 0.5f,
                                       static_cast<float>(table.post_width_mm),
                                       static_cast<float>(table.entries.begin()->first));
 
-                oc.hint_edge_index     = scene.edge_polygon_index(oc.parent_edge);
-                oc.desired_position_mm = static_cast<int>(std::round(pos));
+                oc.set_hint_edge_index(scene.edge_polygon_index(oc.parent_edge()));
+                oc.set_desired_position_mm(static_cast<int>(std::round(pos)));
                 scene.solve(table, assetDir);
             }
 

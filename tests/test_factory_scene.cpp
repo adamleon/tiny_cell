@@ -123,7 +123,7 @@ TEST(node_type_is_post) {
     scene.apply(out);
     for (const auto& n : out.nodes) {
         const auto& nc = scene.registry().get<factory::NodeComponent>(scene.find(n.entity_id));
-        REQUIRE(nc.type == solver::NodeType::Post);
+        REQUIRE(nc.type() == solver::NodeType::Post);
     }
 }
 
@@ -153,10 +153,10 @@ TEST(edge_node_references_are_correct) {
     scene.apply(out);
     for (const auto& e : out.edges) {
         const auto& ec = scene.registry().get<factory::EdgeComponent>(scene.find(e.entity_id));
-        REQUIRE(ec.node_a == scene.find(e.node_a_id));
-        REQUIRE(ec.node_b == scene.find(e.node_b_id));
-        REQUIRE(ec.node_a != entt::null);
-        REQUIRE(ec.node_b != entt::null);
+        REQUIRE(ec.node_a() == scene.find(e.node_a_id));
+        REQUIRE(ec.node_b() == scene.find(e.node_b_id));
+        REQUIRE(ec.node_a() != entt::null);
+        REQUIRE(ec.node_b() != entt::null);
     }
 }
 
@@ -166,7 +166,7 @@ TEST(edge_spans_preserved) {
     scene.apply(out);
     for (const auto& e : out.edges) {
         const auto& ec = scene.registry().get<factory::EdgeComponent>(scene.find(e.entity_id));
-        REQUIRE(ec.spans_mm == e.spans_mm);
+        REQUIRE(ec.spans_mm() == e.spans_mm);
     }
 }
 
@@ -186,7 +186,7 @@ TEST(opening_parent_edge_is_correct) {
     const auto& op_out = out.edges[0].openings[0];
     const auto& oc = scene.registry().get<factory::DeclaredOpeningComponent>(
         scene.find(op_out.entity_id));
-    REQUIRE(oc.parent_edge == scene.find(out.edges[0].entity_id));
+    REQUIRE(oc.parent_edge() == scene.find(out.edges[0].entity_id));
 }
 
 // Edge-allocated: parent_edge set, desired_position_mm absent.
@@ -196,8 +196,8 @@ TEST(opening_is_edge_allocated_not_anchored) {
     scene.apply(out);
     const auto& oc = scene.registry().get<factory::DeclaredOpeningComponent>(
         scene.find(out.edges[0].openings[0].entity_id));
-    REQUIRE(oc.parent_edge != entt::null);
-    REQUIRE(!oc.desired_position_mm.has_value());
+    REQUIRE(oc.parent_edge() != entt::null);
+    REQUIRE(!oc.desired_position_mm().has_value());
 }
 
 TEST(opening_width_preserved) {
@@ -206,7 +206,7 @@ TEST(opening_width_preserved) {
     scene.apply(out);
     const auto& oc = scene.registry().get<factory::DeclaredOpeningComponent>(
         scene.find(out.edges[0].openings[0].entity_id));
-    REQUIRE_EQ(oc.width_mm, 500);
+    REQUIRE_EQ(oc.width_mm(), 500);
 }
 
 TEST(opening_mobility_defaults_to_zero) {
@@ -215,7 +215,7 @@ TEST(opening_mobility_defaults_to_zero) {
     scene.apply(out);
     const auto& oc = scene.registry().get<factory::DeclaredOpeningComponent>(
         scene.find(out.edges[0].openings[0].entity_id));
-    REQUIRE(oc.mobility == 0.0f);
+    REQUIRE(oc.mobility() == 0.0f);
 }
 
 // ── PoseComponent ─────────────────────────────────────────────────────────────

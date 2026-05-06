@@ -100,3 +100,16 @@ add_test(NAME factory_scene_tests
     COMMAND TestFactoryScene
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
+
+add_executable(TestSim tests/test_sim.cpp)
+target_link_libraries(TestSim PRIVATE EnTT::EnTT glm::glm)
+target_include_directories(TestSim PRIVATE
+    src
+    ${threepp_SOURCE_DIR}/src/external/nlohmann
+)
+target_compile_options(TestSim PRIVATE -Wall -Wextra)
+
+add_test(NAME sim_tests
+    COMMAND TestSim
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)

@@ -2,13 +2,13 @@
 
 #include <threepp/threepp.hpp>
 #include <threepp/controls/OrbitControls.hpp>
-#include <threepp/renderers/WgpuRenderer.hpp>
+#include <threepp/renderers/GLRenderer.hpp>
 #include <memory>
 #include <string>
 
 struct SceneSetup {
     threepp::Canvas                             canvas;
-    threepp::WgpuRenderer                       renderer;
+    threepp::GLRenderer                         renderer;
     std::shared_ptr<threepp::Scene>             scene;
     std::shared_ptr<threepp::PerspectiveCamera> camera;
     std::unique_ptr<threepp::OrbitControls>     controls;

@@ -8,7 +8,8 @@
             "args": [
                 "-S", "${workspaceFolder}",
                 "-B", "${workspaceFolder}/build",
-                "-DCMAKE_BUILD_TYPE=Release"
+                "-DCMAKE_BUILD_TYPE=Release",
+                "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
             ],
             "group": "build",
             "presentation": { "reveal": "always" },

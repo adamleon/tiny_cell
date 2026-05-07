@@ -1,0 +1,11 @@
+{
+    "files.watcherExclude": {
+        "**/build/**": true
+    },
+    "files.exclude": {
+        "**/build": false
+    },
+    "C_Cpp.files.exclude": {
+        "**/build/_deps/**": true
+    }
+}

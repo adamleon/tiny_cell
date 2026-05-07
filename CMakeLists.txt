@@ -6,18 +6,17 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(FetchContent)
 
-option(TINYCELL_BUILD_DEMOS "Build demo executables (requires WGPU + X11)" ON)
+option(TINYCELL_BUILD_DEMOS "Build demo executables (requires OpenGL + X11)" ON)
 
-set(THREEPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(THREEPP_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
 set(THREEPP_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-if(TINYCELL_BUILD_DEMOS)
-    set(THREEPP_WITH_WGPU ON CACHE BOOL "" FORCE)
-endif()
+set(THREEPP_WITH_WGPU      OFF CACHE BOOL "" FORCE)
+set(THREEPP_WITH_VULKAN    OFF CACHE BOOL "" FORCE)
 
 FetchContent_Declare(
     threepp
     GIT_REPOSITORY https://github.com/markaren/threepp.git
-    GIT_TAG 1d3a6ab58f9aa392e7d8869cd5671b3c62c5d27a
+    GIT_TAG 64808748c76ef02948034544372e5fc8e855c09d
 )
 FetchContent_MakeAvailable(threepp)
 
@@ -44,14 +43,6 @@ function(add_demo name)
         ${threepp_SOURCE_DIR}/src/external/nlohmann
     )
     target_compile_options(${name} PRIVATE -Wall -Wextra)
-    if(WIN32 AND WGPU_NATIVE_DLL)
-        add_custom_command(TARGET ${name} POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${WGPU_NATIVE_DLL}"
-                "$<TARGET_FILE_DIR:${name}>/wgpu_native.dll"
-            COMMENT "Copying wgpu_native.dll to ${name} output directory"
-        )
-    endif()
 endfunction()
 
 # ── Demos ─────────────────────────────────────────────────────────────────────

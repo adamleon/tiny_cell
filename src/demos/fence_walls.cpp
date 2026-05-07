@@ -517,7 +517,6 @@ int main() {
     ss.controls->maxPolarAngle = math::PI / 2.0f - 0.05f;
     ss.controls->update();
 
-    ss.renderer.usePathTracer = false;
     ss.renderer.shadowMap().enabled = true;
 
     {

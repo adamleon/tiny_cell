@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git *)",
+      "Bash(cmake *)",
+      "Bash(make *)",
+      "Bash(ninja *)"
+    ]
+  }
+}

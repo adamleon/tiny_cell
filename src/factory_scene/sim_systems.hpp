@@ -38,8 +38,10 @@ inline StepEvents step(FactoryScene& scene, float dt) {
             if (!port || port->transport() == entt::null || !ppose) continue;
             if (!scene.transport_has_capacity(port->transport())) break;
 
-            auto item = reg.create();
-            reg.emplace<PoseComponent>(item).position = ppose->position;
+            auto item         = reg.create();
+            auto& item_pose   = reg.emplace<PoseComponent>(item);
+            item_pose.position = ppose->position;
+            item_pose.parent   = scene.root_entity();
             reg.emplace<ItemOnTransportComponent>(item).set_transport(port->transport());
             reg.emplace<SpawnedItemComponent>(item).set_prototype(src.prototype());
 

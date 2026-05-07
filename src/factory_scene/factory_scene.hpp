@@ -159,6 +159,8 @@ public:
 
     std::size_t entity_count() const { return id_map_.size(); }
 
+    entt::entity root_entity() const { return id_map_.at(kSceneEntityId); }
+
     const solver::SolverOutput& current_layout() const { return current_layout_; }
     entt::registry&             registry()              { return registry_; }
     const entt::registry&       registry()        const { return registry_; }
@@ -205,6 +207,7 @@ public:
         pc.set_name(name);
         auto& pose    = registry_.emplace<PoseComponent>(e);
         pose.position = position;
+        pose.parent   = root_entity();
         return e;
     }
 

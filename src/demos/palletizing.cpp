@@ -16,33 +16,12 @@
 #include "cell/fence_solver.hpp"
 #include "factory_scene/belt_mesh.hpp"
 #include "factory_scene/factory_scene.hpp"
+#include "factory_scene/pose_component.hpp"
 #include "factory_scene/render_system.hpp"
 #include "factory_scene/sim_systems.hpp"
+#include "factory_scene/station_systems.hpp"
 
 using namespace threepp;
-
-// ── Cell layout ───────────────────────────────────────────────────────────────
-//
-//  4000 × 4000 mm rectangular cell.  Nodes placed CCW from SW:
-//    edge 0: SW → SE  (south wall, Y = -2000)
-//    edge 1: SE → NE  (east  wall, X = +2000)
-//    edge 2: NE → NW  (north wall, Y = +2000)
-//    edge 3: NW → SW  (west  wall, X = -2000)
-//
-//  Pallet belt: 800 mm wide, N-S through centre (X = 0).
-//    Openings on edges 0 and 2 at position 2000 mm from their first node,
-//    width = 800 + 2×50 = 900 mm.
-//
-//  Box belt:    300 mm wide, E-W, ends adjacent to pallet belt west edge.
-//    Opening on edge 3 at position 2000 mm from NW node (Y = 0),
-//    width = 300 + 2×50 = 400 mm.
-//
-//  Belt lengths are hardcoded.  The box belt end_b stops at pallet belt
-//  west edge (X = -400).  Belt centres:
-//    pallet belt centre: ECS ( 0,    0)  → threepp ( 0,  0,  0),  rot.y = -π/2
-//    box    belt centre: ECS (-1400, 0)  → threepp (-1.4, 0, 0),  rot.y = 0
-//
-// Coordinate mapping  ECS(x, y, z)  → threepp(x * 0.001, z * 0.001, y * 0.001)
 
 int main() {
     const std::string assetDir = "assets/components/fences/axelent_x-guard";
@@ -52,15 +31,14 @@ int main() {
     auto table   = loadTable(assetDir + "/combinations.json");
 
     factory::FactoryScene scene;
-    scene.place_node(-2000.f, -2000.f);  // SW  edge 0 starts here
-    scene.place_node( 2000.f, -2000.f);  // SE
-    scene.place_node( 2000.f,  2000.f);  // NE  edge 2 starts here
-    scene.place_node(-2000.f,  2000.f);  // NW  edge 3 starts here
+    scene.place_node(-2000.f, -2000.f);
+    scene.place_node( 2000.f, -2000.f);
+    scene.place_node( 2000.f,  2000.f);
+    scene.place_node(-2000.f,  2000.f);
 
-    // Belt pass-through openings
-    scene.declare_opening_anchored(0, 2000, 900);  // pallet belt — south fence
-    scene.declare_opening_anchored(2, 2000, 900);  // pallet belt — north fence
-    scene.declare_opening_anchored(3, 2000, 400);  // box belt    — west  fence
+    scene.declare_opening_anchored(0, 2000, 900);
+    scene.declare_opening_anchored(2, 2000, 900);
+    scene.declare_opening_anchored(3, 2000, 400);
 
     scene.solve(table, assetDir);
 
@@ -69,23 +47,23 @@ int main() {
     ss.scene->background = Color(0xf0ede6);
     ss.camera->position.set(5.0f, 6.0f, 8.0f);
     ss.camera->lookAt({0.f, 0.3f, 0.f});
-    ss.controls->target    = {0.f, 0.3f, 0.f};
+    ss.controls->target       = {0.f, 0.3f, 0.f};
     ss.controls->maxPolarAngle = math::PI / 2.0f - 0.04f;
     ss.controls->update();
 
-    ss.renderer.usePathTracer = false;
+    ss.renderer.usePathTracer   = false;
     ss.renderer.shadowMap().enabled = true;
 
     {
         auto sun = DirectionalLight::create(Color(0xffc87a), 2.0f);
         sun->position.set(-4.f, 8.f, 5.f);
-        sun->castShadow          = true;
-        sun->shadow->mapSize     = {2048, 2048};
-        sun->shadow->bias        = -0.0005f;
+        sun->castShadow      = true;
+        sun->shadow->mapSize = {2048, 2048};
+        sun->shadow->bias    = -0.0005f;
         auto* cam = dynamic_cast<OrthographicCamera*>(sun->shadow->camera.get());
         if (cam) {
-            cam->left = -7; cam->right  =  7;
-            cam->top  =  7; cam->bottom = -7;
+            cam->left  = -7; cam->right  =  7;
+            cam->top   =  7; cam->bottom = -7;
             cam->nearPlane = 1.f; cam->farPlane = 20.f;
             cam->updateProjectionMatrix();
         }
@@ -94,14 +72,14 @@ int main() {
     ss.scene->add(AmbientLight::create(Color(0xfff0e0), 1.1f));
 
     {
-        auto geo  = PlaneGeometry::create(60.f, 60.f);
-        auto mat  = MeshStandardMaterial::create();
+        auto geo   = PlaneGeometry::create(60.f, 60.f);
+        auto mat   = MeshStandardMaterial::create();
         mat->color     = Color(0xe8e4d8);
         mat->roughness = 0.5f;
         mat->metalness = 0.f;
         auto floor = Mesh::create(geo, mat);
-        floor->rotation.x  = -math::PI / 2.f;
-        floor->position.y  = -0.001f;
+        floor->rotation.x    = -math::PI / 2.f;
+        floor->position.y    = -0.001f;
         floor->receiveShadow = true;
         ss.scene->add(floor);
     }
@@ -113,12 +91,12 @@ int main() {
     fenceGrp->traverse([](Object3D& o) { o.castShadow = o.receiveShadow = true; });
     ss.scene->add(fenceGrp);
 
-    // ── Belts ─────────────────────────────────────────────────────────────────
+    // ── Belt meshes ───────────────────────────────────────────────────────────
     auto beltTex = belt::makeBeltTexture();
 
-    // Pallet belt: 800 mm wide, 6000 mm long, 400 mm surface height.
-    // Centre at ECS (0, 0) = threepp (0, 0, 0).  Travels N-S → rotation.y = -π/2.
-    auto [palletObj, palletMat] = belt::buildBeltMesh(800, 6000, 400,
+    // Single visual mesh for combined pallet belt (south+north = 6000mm total).
+    // Centre at ECS (0, 0) → threepp (0, 0, 0). Travels N (+y) → rot.y = -π/2.
+    auto [palletObj, palletMat] = belt::buildBeltMesh(800, 6000, 0,
                                                        belt::kGenericCatalog, beltTex);
     {
         auto grp = Group::create();
@@ -129,69 +107,82 @@ int main() {
         ss.scene->add(grp);
     }
 
-    // Box belt: 300 mm wide, 2000 mm long, 800 mm surface height.
-    // end_b (east)  = ECS X = -400 (adjacent to pallet belt west edge)
-    // end_a (west)  = ECS X = -2400 (400 mm outside west fence)
-    // centre        = ECS X = -1400 → threepp X = -1.4.
-    // Travels E → rotation.y = 0.
-    auto [boxObj, boxMat] = belt::buildBeltMesh(300, 2000, 800,
+    // Box belt: 2800mm, travels +x.
+    // Centre ECS X = (-2400 + 400) / 2 = -1000 → threepp X = -1.0.
+    auto [boxObj, boxMat] = belt::buildBeltMesh(300, 2800, 800,
                                                  belt::kGenericCatalog, beltTex);
     {
         auto grp = Group::create();
         grp->add(boxObj);
-        grp->position.set(-1.4f, 0.f, 0.f);
+        grp->position.set(-1.0f, 0.f, 0.f);
         grp->rotation.y = 0.f;
         grp->traverse([](Object3D& o) { o.castShadow = o.receiveShadow = true; });
         ss.scene->add(grp);
     }
 
     // ── Simulation ────────────────────────────────────────────────────────────
-    // All positions in ECS mm (x=east, y=north, z=up).
-    // Rendering maps: threepp(x, y, z) = ECS(x*0.001, z*0.001, y*0.001).
-    //
-    // Exit port semantics: .transport = next belt entity (entt::null = terminal);
-    //                      .position  = landing spot on that next belt.
-    // Items transfer by snapping to exit_port.position and switching transport —
-    // this represents the robot pick-and-place between box belt and pallet belt.
-
     auto& reg = scene.registry();
     std::unordered_map<entt::entity, std::shared_ptr<threepp::Object3D>> item_meshes;
 
-    // Box belt: travels east (+x), 2000 mm, surface at z=800
-    auto box_belt_e     = scene.add_belt(300, 2000, 800, 200.f, {1.f, 0.f, 0.f});
-    // Pallet belt: travels north (+y), 6000 mm, surface at z=400
-    auto pallet_belt_e  = scene.add_belt(800, 6000, 400, 200.f, {0.f, 1.f, 0.f});
+    // South pallet segment: travels +y, 3000mm, surface z=0
+    auto south_segment_e = scene.add_belt(800, 3000, 0, 200.f, {0.f, 1.f, 0.f});
+    auto pal_south_entry_e = scene.add_port("pal_south_entry", {0.f, -3000.f, 0.f});
+    auto pal_station_port_e = scene.add_port("pal_station_port", {0.f, 0.f, 0.f});
+    scene.connect_belt(south_segment_e, pal_south_entry_e, pal_station_port_e);
+    scene.set_port_transport(pal_south_entry_e, south_segment_e);
+    // pal_station_port transport stays null — station intercepts
 
-    // Ports — ECS positions in mm (x=east, y=north, z=up)
-    auto box_entry_e    = scene.add_port("box_entry",    factory::PortDirection::In,  {-2400.f, 0.f, 800.f});
-    auto box_exit_e     = scene.add_port("box_exit",     factory::PortDirection::Out, {0.f, 0.f, 400.f});
-    auto pallet_entry_e = scene.add_port("pallet_entry", factory::PortDirection::In,  {0.f, -3000.f, 400.f});
-    auto pallet_exit_e  = scene.add_port("pallet_exit",  factory::PortDirection::Out, {0.f, 3000.f, 400.f});
+    // North pallet segment: travels +y, 3000mm, surface z=0
+    auto north_segment_e = scene.add_belt(800, 3000, 0, 200.f, {0.f, 1.f, 0.f});
+    auto pal_north_entry_e = scene.add_port("pal_north_entry", {0.f, 0.f, 0.f});
+    auto pal_north_exit_e  = scene.add_port("pal_north_exit",  {0.f, 3000.f, 0.f});
+    scene.connect_belt(north_segment_e, pal_north_entry_e, pal_north_exit_e);
+    scene.set_port_transport(pal_north_entry_e, north_segment_e);
+    // pal_north_exit transport stays null — sink handles it
 
-    scene.connect_belt(box_belt_e,    box_entry_e,    box_exit_e);
-    scene.connect_belt(pallet_belt_e, pallet_entry_e, pallet_exit_e);
+    // Box belt: travels +x, 2800mm, surface z=800
+    auto box_belt_e = scene.add_belt(300, 2800, 800, 200.f, {1.f, 0.f, 0.f});
+    auto box_entry_e = scene.add_port("box_entry",       {-2400.f, 0.f, 800.f});
+    auto box_station_port_e = scene.add_port("box_station_port", {400.f, 0.f, 800.f});
+    scene.connect_belt(box_belt_e, box_entry_e, box_station_port_e);
+    scene.set_port_transport(box_entry_e, box_belt_e);
+    // box_station_port transport stays null — station intercepts
 
-    scene.set_port_transport(box_entry_e,    box_belt_e);
-    scene.set_port_transport(box_exit_e,     pallet_belt_e);  // handoff to pallet belt
-    scene.set_port_transport(pallet_entry_e, pallet_belt_e);
-    // pallet_exit_e transport stays null (terminal)
+    // Prototypes
+    auto pallet_proto_e = scene.add_prototype(1200, 800, 145, 0xC8A060u);
+    auto box_proto_e    = scene.add_prototype(300, 300, 300, 0x8B4513u);
 
-    auto box_proto_e    = scene.add_prototype(300, 300,  300, 0x8B4513u);
-    auto pallet_proto_e = scene.add_prototype(800, 1200, 145, 0xC8A060u);
-
+    // Sources
+    scene.add_source( 30.f, pallet_proto_e, pal_south_entry_e);
     scene.add_source(540.f, box_proto_e,    box_entry_e);
-    scene.add_source( 30.f, pallet_proto_e, pallet_entry_e);
-    scene.add_sink(pallet_exit_e);
+
+    // Sink at north exit
+    scene.add_sink(pal_north_exit_e);
+
+    // Station entity
+    auto station_e = reg.create();
+    auto& sc = reg.emplace<factory::StationComponent>(station_e);
+    sc.set_arrival_port(box_station_port_e);
+    sc.set_controlled_transport(box_belt_e);
+    sc.set_mechanism(std::make_shared<factory::ProcessMechanism>(1.5f));
+
+    auto& pc = reg.emplace<factory::PalletizeComponent>(station_e);
+    pc.set_pallet_arrival_port(pal_station_port_e);
+    pc.set_pallet_output_transport(north_segment_e);
+    pc.set_pallet_segment(south_segment_e);
+    pc.set_pattern(std::make_shared<factory::GridPattern>());
+    pc.set_pallet_dimensions(1200, 800, 145, 1500);
 
     // ── Animate ───────────────────────────────────────────────────────────────
     const float tile_pitch_m = belt::kGenericCatalog.tile_pitch_mm * 0.001f;
-    Clock       clock;
+    Clock clock;
 
     ss.canvas.animate([&] {
         float delta = clock.getDelta();
 
         // ── Simulation ────────────────────────────────────────────────────────
         auto events = factory::sim::step(scene, delta);
+        factory::station::step(scene, events.arrived, delta);
 
         // ── Render ────────────────────────────────────────────────────────────
 
@@ -217,7 +208,7 @@ int main() {
             item_meshes[item] = mesh;
         }
 
-        // Sync mesh positions from ECS poses
+        // Sync mesh positions using world_transform for parent-chain support
         for (auto&& [ent, pose, sp] :
              reg.view<factory::PoseComponent,
                       factory::SpawnedItemComponent>().each())
@@ -226,11 +217,45 @@ int main() {
             if (mit == item_meshes.end()) continue;
             auto* proto = reg.try_get<factory::ItemPrototypeComponent>(sp.prototype());
             float hh_mm = proto ? proto->height_mm() * 0.5f : 0.f;
-            // ECS(x, y, z) → threepp(x, z, y) in metres
+            auto  wmat  = factory::world_transform(ent, reg);
+            glm::vec3 wpos = glm::vec3(wmat[3]);
+            // ECS(x, y, z) → threepp(x, z, y) in metres, with half-height offset on Y
             mit->second->position.set(
-                pose.position.x * 0.001f,
-                (pose.position.z + hh_mm) * 0.001f,
-                pose.position.y * 0.001f);
+                wpos.x * 0.001f,
+                (wpos.z + hh_mm) * 0.001f,
+                wpos.y * 0.001f);
+        }
+
+        // Handle arrived events: sinks that weren't consumed by station
+        for (auto& arr : events.arrived) {
+            if (arr.port == entt::null) continue;
+            bool consumed = false;
+            reg.view<factory::SinkComponent>().each([&](factory::SinkComponent& sk) {
+                if (sk.in_port() == arr.port) {
+                    sk.increment_received();
+                    consumed = true;
+                }
+            });
+            if (consumed) {
+                // Destroy pallet items' meshes first
+                auto* palletc = reg.try_get<factory::PalletComponent>(arr.item);
+                if (palletc) {
+                    for (auto child_e : palletc->items()) {
+                        auto mit = item_meshes.find(child_e);
+                        if (mit != item_meshes.end()) {
+                            ss.scene->remove(*mit->second);
+                            item_meshes.erase(mit);
+                        }
+                        reg.destroy(child_e);
+                    }
+                }
+                auto mit = item_meshes.find(arr.item);
+                if (mit != item_meshes.end()) {
+                    ss.scene->remove(*mit->second);
+                    item_meshes.erase(mit);
+                }
+                reg.destroy(arr.item);
+            }
         }
 
         // Remove meshes for despawned items, then destroy entities

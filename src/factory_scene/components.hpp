@@ -9,13 +9,6 @@
 #include "solver/types.hpp"
 #include "pose_component.hpp"
 
-// One struct per entity type. An entity's role is determined by which components
-// it has — there is no discriminator field.
-//
-// Fields with invariants are private with validated setters. Fields without
-// invariants are public. Validation uses detail:: helpers that assert in debug
-// builds and compile out in release.
-
 namespace factory {
 
 // ── Validation helpers ────────────────────────────────────────────────────────
@@ -56,10 +49,6 @@ private:
     std::string                   catalog_ref_;
 };
 
-// Allocation state is encoded by which optional fields are set:
-//   parent_edge absent               → Unallocated  (solver chooses edge + position)
-//   parent_edge set, position absent → Edge-allocated (solver chooses position)
-//   both set                         → Anchored     (user confirmed)
 struct DeclaredOpeningComponent {
     entt::entity              parent_edge()         const { return parent_edge_; }
     const std::optional<int>& desired_position_mm() const { return desired_position_mm_; }
@@ -92,7 +81,7 @@ struct TransportComponent {
 
 private:
     bool running_  = true;
-    int  capacity_ = 0;  // 0 = unlimited; enforced at placement via view scan
+    int  capacity_ = 0;
 };
 
 struct ConveyorBeltComponent {
@@ -105,6 +94,7 @@ struct ConveyorBeltComponent {
     Vec3               dir()                  const { return dir_; }
     entt::entity       entry_port()           const { return entry_port_; }
     entt::entity       exit_port()            const { return exit_port_; }
+    bool               capacity_blocked()     const { return capacity_blocked_; }
 
     void set_catalog_ref(std::string r)         { catalog_ref_          = std::move(r); }
     void set_width_mm(int mm)                   { width_mm_             = detail::positive(mm); }
@@ -115,6 +105,7 @@ struct ConveyorBeltComponent {
     void set_dir(Vec3 d)                        { dir_                  = d; }
     void set_entry_port(entt::entity e)         { entry_port_           = e; }
     void set_exit_port(entt::entity e)          { exit_port_            = e; }
+    void set_capacity_blocked(bool b)           { capacity_blocked_     = b; }
 
 private:
     std::string  catalog_ref_          = "generic/flat-belt";
@@ -126,25 +117,24 @@ private:
     Vec3         dir_                  = {1.f, 0.f, 0.f};
     entt::entity entry_port_           = entt::null;
     entt::entity exit_port_            = entt::null;
+    bool         capacity_blocked_     = false;
 };
 
 // ── Ports ─────────────────────────────────────────────────────────────────────
 
-enum class PortDirection { In, Out };
-
 struct PortComponent {
-    const std::string& name()      const { return name_; }
-    PortDirection      direction() const { return direction_; }
-    entt::entity       transport() const { return transport_; }
+    const std::string& name()        const { return name_; }
+    entt::entity       transport()   const { return transport_; }
+    float              min_gap_mm()  const { return min_gap_mm_; }
 
-    void set_name(std::string n)        { name_      = std::move(n); }
-    void set_direction(PortDirection d) { direction_ = d; }
-    void set_transport(entt::entity e)  { transport_ = e; }  // null = terminal
+    void set_name(std::string n)       { name_       = std::move(n); }
+    void set_transport(entt::entity e) { transport_  = e; }
+    void set_min_gap_mm(float v)       { min_gap_mm_ = detail::finite_non_neg(v); }
 
 private:
-    std::string   name_;
-    PortDirection direction_ = PortDirection::Out;
-    entt::entity  transport_ = entt::null;
+    std::string  name_;
+    entt::entity transport_  = entt::null;
+    float        min_gap_mm_ = 0.f;
 };
 
 // ── Source / Sink ─────────────────────────────────────────────────────────────
@@ -216,6 +206,27 @@ private:
     entt::entity transport_ = entt::null;
 };
 
-// ── Future entity types go here (robot, station, …) ──────────────────────────
+// ── Pallet ────────────────────────────────────────────────────────────────────
+
+struct PalletComponent {
+    int                              length_mm()          const { return length_mm_; }
+    int                              width_mm()           const { return width_mm_; }
+    int                              height_mm()          const { return height_mm_; }
+    int                              max_stack_height_mm() const { return max_stack_height_mm_; }
+    const std::vector<entt::entity>& items()              const { return items_; }
+
+    void set_length_mm(int mm)          { length_mm_          = detail::positive(mm); }
+    void set_width_mm(int mm)           { width_mm_           = detail::positive(mm); }
+    void set_height_mm(int mm)          { height_mm_          = detail::positive(mm); }
+    void set_max_stack_height_mm(int mm){ max_stack_height_mm_ = detail::positive(mm); }
+    void add_item(entt::entity e)       { items_.push_back(e); }
+
+private:
+    int                      length_mm_          = 1200;
+    int                      width_mm_           = 800;
+    int                      height_mm_          = 145;
+    int                      max_stack_height_mm_ = 1500;
+    std::vector<entt::entity> items_;
+};
 
 }  // namespace factory

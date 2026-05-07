@@ -139,8 +139,8 @@ static std::tuple<factory::FactoryScene, entt::entity, entt::entity, entt::entit
 make_belt_scene(int capacity = 0, bool running = true) {
     factory::FactoryScene scene;
     auto belt_e  = scene.add_belt(300, 1000, 400, 200.f, {1.f, 0.f, 0.f}, capacity);
-    auto entry_e = scene.add_port("entry", factory::PortDirection::In,  {0.f,    0.f, 400.f});
-    auto exit_e  = scene.add_port("exit",  factory::PortDirection::Out, {1000.f, 0.f, 400.f});
+    auto entry_e = scene.add_port("entry", {0.f,    0.f, 400.f});
+    auto exit_e  = scene.add_port("exit",  {1000.f, 0.f, 400.f});
     scene.connect_belt(belt_e, entry_e, exit_e);
     scene.set_port_transport(entry_e, belt_e);
     // exit transport stays null (terminal)
@@ -186,8 +186,8 @@ TEST(transport_not_running_has_no_capacity) {
 static factory::FactoryScene make_source_scene() {
     factory::FactoryScene scene;
     auto belt_e  = scene.add_belt(300, 2000, 400, 200.f, {1.f, 0.f, 0.f});
-    auto entry_e = scene.add_port("entry", factory::PortDirection::In,  {0.f,    0.f, 400.f});
-    auto exit_e  = scene.add_port("exit",  factory::PortDirection::Out, {2000.f, 0.f, 400.f});
+    auto entry_e = scene.add_port("entry", {0.f,    0.f, 400.f});
+    auto exit_e  = scene.add_port("exit",  {2000.f, 0.f, 400.f});
     scene.connect_belt(belt_e, entry_e, exit_e);
     scene.set_port_transport(entry_e, belt_e);
 
@@ -221,8 +221,8 @@ TEST(spawned_item_starts_at_entry_port) {
     // and only 0.2 mm of movement before the check.
     factory::FactoryScene scene;
     auto belt_e  = scene.add_belt(300, 2000, 400, 200.f, {1.f, 0.f, 0.f});
-    auto entry_e = scene.add_port("entry", factory::PortDirection::In,  {0.f,    0.f, 400.f});
-    auto exit_e  = scene.add_port("exit",  factory::PortDirection::Out, {2000.f, 0.f, 400.f});
+    auto entry_e = scene.add_port("entry",  {0.f,    0.f, 400.f});
+    auto exit_e  = scene.add_port("exit", {2000.f, 0.f, 400.f});
     scene.connect_belt(belt_e, entry_e, exit_e);
     scene.set_port_transport(entry_e, belt_e);
     auto proto_e = scene.add_prototype(300, 300, 300, 0x8B4513u);
@@ -246,8 +246,8 @@ TEST(no_spawn_when_debt_below_one) {
 TEST(no_spawn_when_belt_at_capacity) {
     factory::FactoryScene scene;
     auto belt_e  = scene.add_belt(300, 2000, 400, 200.f, {1.f, 0.f, 0.f}, 1);
-    auto entry_e = scene.add_port("entry", factory::PortDirection::In,  {0.f,    0.f, 400.f});
-    auto exit_e  = scene.add_port("exit",  factory::PortDirection::Out, {2000.f, 0.f, 400.f});
+    auto entry_e = scene.add_port("entry",  {0.f,    0.f, 400.f});
+    auto exit_e  = scene.add_port("exit", {2000.f, 0.f, 400.f});
     scene.connect_belt(belt_e, entry_e, exit_e);
     scene.set_port_transport(entry_e, belt_e);
 
@@ -271,8 +271,8 @@ TEST(no_spawn_when_belt_at_capacity) {
 TEST(item_moves_along_belt_direction) {
     factory::FactoryScene scene;
     auto belt_e  = scene.add_belt(300, 2000, 400, 200.f, {1.f, 0.f, 0.f});
-    auto entry_e = scene.add_port("entry", factory::PortDirection::In,  {0.f,    0.f, 400.f});
-    auto exit_e  = scene.add_port("exit",  factory::PortDirection::Out, {2000.f, 0.f, 400.f});
+    auto entry_e = scene.add_port("entry",  {0.f,    0.f, 400.f});
+    auto exit_e  = scene.add_port("exit", {2000.f, 0.f, 400.f});
     scene.connect_belt(belt_e, entry_e, exit_e);
 
     auto& reg  = scene.registry();
@@ -314,15 +314,16 @@ TEST(stopped_transport_does_not_move_items) {
 
 // ── sim::step: terminal despawn ───────────────────────────────────────────────
 
-// Belt: 1000mm long, speed 200 mm/s. Spawn then run 5s → item exits, no next transport → despawn.
+// Belt: 1000mm long, speed 200 mm/s. Spawn then run 5s → item exits.
+// No sink → item arrives at port (not despawned).
 TEST(item_despawns_at_terminal_exit) {
     factory::FactoryScene scene;
     auto belt_e  = scene.add_belt(300, 1000, 400, 200.f, {1.f, 0.f, 0.f});
-    auto entry_e = scene.add_port("entry", factory::PortDirection::In,  {0.f,    0.f, 400.f});
-    auto exit_e  = scene.add_port("exit",  factory::PortDirection::Out, {1000.f, 0.f, 400.f});
+    auto entry_e = scene.add_port("entry",  {0.f,    0.f, 400.f});
+    auto exit_e  = scene.add_port("exit", {1000.f, 0.f, 400.f});
     scene.connect_belt(belt_e, entry_e, exit_e);
     scene.set_port_transport(entry_e, belt_e);
-    // exit transport intentionally null (terminal)
+    scene.add_sink(exit_e);  // sink → item is despawned on exit
 
     auto proto_e = scene.add_prototype(300, 300, 300, 0xFF0000u);
     scene.add_source(3600.f, proto_e, entry_e);
@@ -341,8 +342,8 @@ TEST(item_despawns_at_terminal_exit) {
 TEST(sink_increments_received_on_despawn) {
     factory::FactoryScene scene;
     auto belt_e  = scene.add_belt(300, 1000, 400, 200.f, {1.f, 0.f, 0.f});
-    auto entry_e = scene.add_port("entry", factory::PortDirection::In,  {0.f,    0.f, 400.f});
-    auto exit_e  = scene.add_port("exit",  factory::PortDirection::Out, {1000.f, 0.f, 400.f});
+    auto entry_e = scene.add_port("entry",  {0.f,    0.f, 400.f});
+    auto exit_e  = scene.add_port("exit", {1000.f, 0.f, 400.f});
     scene.connect_belt(belt_e, entry_e, exit_e);
     scene.add_sink(exit_e);
 
@@ -370,12 +371,12 @@ TEST(item_transfers_to_next_belt) {
     factory::FactoryScene scene;
 
     auto belt_a  = scene.add_belt(300, 1000, 400, 200.f, {1.f, 0.f, 0.f});
-    auto entry_a = scene.add_port("entry_a", factory::PortDirection::In,  {0.f,    0.f, 400.f});
-    auto exit_a  = scene.add_port("exit_a",  factory::PortDirection::Out, {1000.f, 0.f, 400.f});
+    auto entry_a = scene.add_port("entry_a",  {0.f,    0.f, 400.f});
+    auto exit_a  = scene.add_port("exit_a", {1000.f, 0.f, 400.f});
 
     auto belt_b  = scene.add_belt(300, 2000, 400, 200.f, {1.f, 0.f, 0.f});
-    auto entry_b = scene.add_port("entry_b", factory::PortDirection::In,  {1000.f, 0.f, 400.f});
-    auto exit_b  = scene.add_port("exit_b",  factory::PortDirection::Out, {3000.f, 0.f, 400.f});
+    auto entry_b = scene.add_port("entry_b",  {1000.f, 0.f, 400.f});
+    auto exit_b  = scene.add_port("exit_b", {3000.f, 0.f, 400.f});
 
     scene.connect_belt(belt_a, entry_a, exit_a);
     scene.connect_belt(belt_b, entry_b, exit_b);

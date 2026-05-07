@@ -174,12 +174,18 @@ int main() {
         // ── Render ────────────────────────────────────────────────────────────
 
         // UV scrolling: Three.js UV = uv*repeat + offset, so d(offset)/dt = -speed/tile_pitch.
-        // Pallet: stop when south is stopped (pallet held at station).
-        // North segment is never explicitly stopped so OR-ing would always scroll.
+        // Pallet belt: animate when south is running (empty pallet travelling) OR the north
+        // segment has an item on it (full pallet departing). North's running_ is never set to
+        // false, so OR-ing the two running() flags would always scroll — check item presence instead.
         const float tile_pitch_m = belt::kGenericCatalog.tile_pitch_mm * 0.001f;
         {
+            bool north_active = false;
+            for (auto&& [_, itc] : reg.view<factory::ItemOnTransportComponent>().each())
+                if (itc.transport() == north_segment_e) { north_active = true; break; }
+
             auto* tc_s = reg.try_get<factory::TransportComponent>(south_segment_e);
-            if (palletMat->map && tc_s && tc_s->running()) {
+            bool south_running = tc_s && tc_s->running();
+            if (palletMat->map && (south_running || north_active)) {
                 auto* bc_s = reg.try_get<factory::ConveyorBeltComponent>(south_segment_e);
                 if (bc_s)
                     palletMat->map->offset.x -= bc_s->belt_speed_mm_s() * 0.001f * delta / tile_pitch_m;

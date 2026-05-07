@@ -51,22 +51,11 @@ int main() {
     ss.controls->maxPolarAngle = math::PI / 2.0f - 0.04f;
     ss.controls->update();
 
-    ss.renderer.usePathTracer   = false;
-    ss.renderer.shadowMap().enabled = true;
+    ss.renderer.shadowMap().enabled = false;
 
     {
         auto sun = DirectionalLight::create(Color(0xffc87a), 2.0f);
         sun->position.set(-4.f, 8.f, 5.f);
-        sun->castShadow      = true;
-        sun->shadow->mapSize = {2048, 2048};
-        sun->shadow->bias    = -0.0005f;
-        auto* cam = dynamic_cast<OrthographicCamera*>(sun->shadow->camera.get());
-        if (cam) {
-            cam->left  = -7; cam->right  =  7;
-            cam->top   =  7; cam->bottom = -7;
-            cam->nearPlane = 1.f; cam->farPlane = 20.f;
-            cam->updateProjectionMatrix();
-        }
         ss.scene->add(sun);
     }
     ss.scene->add(AmbientLight::create(Color(0xfff0e0), 1.1f));
@@ -78,9 +67,8 @@ int main() {
         mat->roughness = 0.5f;
         mat->metalness = 0.f;
         auto floor = Mesh::create(geo, mat);
-        floor->rotation.x    = -math::PI / 2.f;
-        floor->position.y    = -0.001f;
-        floor->receiveShadow = true;
+        floor->rotation.x = -math::PI / 2.f;
+        floor->position.y = -0.001f;
         ss.scene->add(floor);
     }
 
@@ -88,35 +76,35 @@ int main() {
     OBJLoader loader;
     auto protos   = cell::loadCatalogProtos(loader, assetDir, catalog);
     auto fenceGrp = render::buildScene(scene, protos);
-    fenceGrp->traverse([](Object3D& o) { o.castShadow = o.receiveShadow = true; });
     ss.scene->add(fenceGrp);
 
     // ── Belt meshes ───────────────────────────────────────────────────────────
-    auto beltTex = belt::makeBeltTexture();
+    // Separate textures — sharing one DataTexture would let the second buildBeltMesh
+    // call overwrite the repeat settings set by the first.
+    auto palletTex = belt::makeBeltTexture();
+    auto boxTex    = belt::makeBeltTexture();
 
     // Single visual mesh for combined pallet belt (south+north = 6000mm total).
     // Centre at ECS (0, 0) → threepp (0, 0, 0). Travels N (+y) → rot.y = -π/2.
     auto [palletObj, palletMat] = belt::buildBeltMesh(800, 6000, 0,
-                                                       belt::kGenericCatalog, beltTex);
+                                                       belt::kGenericCatalog, palletTex);
     {
         auto grp = Group::create();
         grp->add(palletObj);
         grp->position.set(0.f, 0.f, 0.f);
         grp->rotation.y = -math::PI / 2.0f;
-        grp->traverse([](Object3D& o) { o.castShadow = o.receiveShadow = true; });
         ss.scene->add(grp);
     }
 
     // Box belt: 2800mm, travels +x.
     // Centre ECS X = (-2400 + 400) / 2 = -1000 → threepp X = -1.0.
     auto [boxObj, boxMat] = belt::buildBeltMesh(300, 2800, 800,
-                                                 belt::kGenericCatalog, beltTex);
+                                                 belt::kGenericCatalog, boxTex);
     {
         auto grp = Group::create();
         grp->add(boxObj);
         grp->position.set(-1.0f, 0.f, 0.f);
         grp->rotation.y = 0.f;
-        grp->traverse([](Object3D& o) { o.castShadow = o.receiveShadow = true; });
         ss.scene->add(grp);
     }
 
@@ -150,11 +138,11 @@ int main() {
 
     // Prototypes
     auto pallet_proto_e = scene.add_prototype(1200, 800, 145, 0xC8A060u);
-    auto box_proto_e    = scene.add_prototype(300, 300, 300, 0x8B4513u);
+    auto box_proto_e    = scene.add_prototype(250, 250, 200, 0x8B4513u);
 
-    // Sources
-    scene.add_source( 30.f, pallet_proto_e, pal_south_entry_e);
-    scene.add_source(540.f, box_proto_e,    box_entry_e);
+    // Sources — rates tuned for a watchable demo (pallet fills in ~30s)
+    scene.add_source( 360.f, pallet_proto_e, pal_south_entry_e);
+    scene.add_source(1800.f, box_proto_e,    box_entry_e);
 
     // Sink at north exit
     scene.add_sink(pal_north_exit_e);
@@ -174,7 +162,6 @@ int main() {
     pc.set_pallet_dimensions(1200, 800, 145, 1500);
 
     // ── Animate ───────────────────────────────────────────────────────────────
-    const float tile_pitch_m = belt::kGenericCatalog.tile_pitch_mm * 0.001f;
     Clock clock;
 
     ss.canvas.animate([&] {
@@ -186,24 +173,39 @@ int main() {
 
         // ── Render ────────────────────────────────────────────────────────────
 
-        // UV scrolling
-        float scroll = (200.f * 0.001f * delta) / tile_pitch_m;
-        if (palletMat->map) palletMat->map->offset.x += scroll;
-        if (boxMat->map)    boxMat->map->offset.x    += scroll;
+        // UV scrolling: Three.js UV = uv*repeat + offset, so d(offset)/dt = -speed/tile_pitch.
+        // Pallet: stop when south is stopped (pallet held at station).
+        // North segment is never explicitly stopped so OR-ing would always scroll.
+        const float tile_pitch_m = belt::kGenericCatalog.tile_pitch_mm * 0.001f;
+        {
+            auto* tc_s = reg.try_get<factory::TransportComponent>(south_segment_e);
+            if (palletMat->map && tc_s && tc_s->running()) {
+                auto* bc_s = reg.try_get<factory::ConveyorBeltComponent>(south_segment_e);
+                if (bc_s)
+                    palletMat->map->offset.x -= bc_s->belt_speed_mm_s() * 0.001f * delta / tile_pitch_m;
+            }
+        }
+        {
+            auto* tc = reg.try_get<factory::TransportComponent>(box_belt_e);
+            if (boxMat->map && tc && tc->running()) {
+                auto* bc = reg.try_get<factory::ConveyorBeltComponent>(box_belt_e);
+                if (bc)
+                    boxMat->map->offset.x -= bc->belt_speed_mm_s() * 0.001f * delta / tile_pitch_m;
+            }
+        }
 
         // Create meshes for newly spawned items
         for (auto& [item, proto_e] : events.spawned) {
             auto* proto = reg.try_get<factory::ItemPrototypeComponent>(proto_e);
             if (!proto) continue;
             auto geo = threepp::BoxGeometry::create(
-                proto->length_mm() * 0.001f,
+                proto->width_mm()  * 0.001f,
                 proto->height_mm() * 0.001f,
-                proto->width_mm()  * 0.001f);
+                proto->length_mm() * 0.001f);
             auto mat       = threepp::MeshStandardMaterial::create();
             mat->color     = threepp::Color(proto->color_hex());
             mat->roughness = 0.6f;
             auto mesh = threepp::Mesh::create(geo, mat);
-            mesh->castShadow = mesh->receiveShadow = true;
             ss.scene->add(mesh);
             item_meshes[item] = mesh;
         }
@@ -226,40 +228,19 @@ int main() {
                 wpos.y * 0.001f);
         }
 
-        // Handle arrived events: sinks that weren't consumed by station
-        for (auto& arr : events.arrived) {
-            if (arr.port == entt::null) continue;
-            bool consumed = false;
-            reg.view<factory::SinkComponent>().each([&](factory::SinkComponent& sk) {
-                if (sk.in_port() == arr.port) {
-                    sk.increment_received();
-                    consumed = true;
-                }
-            });
-            if (consumed) {
-                // Destroy pallet items' meshes first
-                auto* palletc = reg.try_get<factory::PalletComponent>(arr.item);
-                if (palletc) {
-                    for (auto child_e : palletc->items()) {
-                        auto mit = item_meshes.find(child_e);
-                        if (mit != item_meshes.end()) {
-                            ss.scene->remove(*mit->second);
-                            item_meshes.erase(mit);
-                        }
-                        reg.destroy(child_e);
-                    }
-                }
-                auto mit = item_meshes.find(arr.item);
-                if (mit != item_meshes.end()) {
-                    ss.scene->remove(*mit->second);
-                    item_meshes.erase(mit);
-                }
-                reg.destroy(arr.item);
-            }
-        }
-
-        // Remove meshes for despawned items, then destroy entities
+        // Remove meshes for despawned items; cascade children for full pallets
         for (auto e : events.despawned) {
+            auto* palletc = reg.try_get<factory::PalletComponent>(e);
+            if (palletc) {
+                for (auto child : palletc->items()) {
+                    auto cmit = item_meshes.find(child);
+                    if (cmit != item_meshes.end()) {
+                        ss.scene->remove(*cmit->second);
+                        item_meshes.erase(cmit);
+                    }
+                    reg.destroy(child);
+                }
+            }
             auto mit = item_meshes.find(e);
             if (mit != item_meshes.end()) {
                 ss.scene->remove(*mit->second);

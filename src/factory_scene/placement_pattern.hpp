@@ -22,17 +22,20 @@ public:
         const ItemPrototypeComponent& proto,
         const entt::registry&) const override
     {
-        int cols   = pallet.length_mm() / proto.length_mm();
-        int rows   = pallet.width_mm()  / proto.width_mm();
+        // cols along ECS X (across belt = pallet width), rows along ECS Y (belt dir = pallet length)
+        int cols   = pallet.width_mm()  / proto.width_mm();
+        int rows   = pallet.length_mm() / proto.length_mm();
         int placed = static_cast<int>(pallet.items().size());
         if (cols <= 0 || rows <= 0 || placed >= cols * rows) return std::nullopt;
 
         int col = placed % cols;
         int row = placed / cols;
 
-        float x = (col + 0.5f) * proto.length_mm() - pallet.length_mm() * 0.5f;
-        float y = (row + 0.5f) * proto.width_mm()  - pallet.width_mm()  * 0.5f;
-        float z = static_cast<float>(pallet.height_mm()) + proto.height_mm() * 0.5f;
+        // Centre on the placed footprint so items don't drift to one edge
+        float x = (col + 0.5f) * proto.width_mm()  - cols * proto.width_mm()  * 0.5f;
+        float y = (row + 0.5f) * proto.length_mm() - rows * proto.length_mm() * 0.5f;
+        // z = bottom surface of item (pallet top). Render loop adds half-height to get centre.
+        float z = static_cast<float>(pallet.height_mm());
 
         PoseComponent pose;
         pose.position    = Vec3{x, y, z};

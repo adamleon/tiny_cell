@@ -14,10 +14,10 @@ namespace factory {
 // ── Validation helpers ────────────────────────────────────────────────────────
 
 namespace detail {
-    inline float finite_non_neg(float v)  { assert(std::isfinite(v) && v >= 0.f);               return v; }
-    inline float unit_interval(float v)   { assert(std::isfinite(v) && v >= 0.f && v <= 1.f);   return v; }
-    inline int   positive(int v)          { assert(v > 0);                                        return v; }
-    inline int   non_neg(int v)           { assert(v >= 0);                                       return v; }
+    inline float finite_non_neg(float v)  { assert(std::isfinite(v) && v >= 0.f);             return v; }
+    inline float unit_interval(float v)   { assert(std::isfinite(v) && v >= 0.f && v <= 1.f); return v; }
+    inline int   positive(int v)          { assert(v > 0);                                    return v; }
+    inline int   non_neg(int v)           { assert(v >= 0);                                   return v; }
     inline entt::entity valid_entity(entt::entity e) { assert(e != entt::null); return e; }
 }
 
@@ -70,31 +70,62 @@ private:
     int                hint_edge_index_     = -1;
 };
 
+// ── Sensors ───────────────────────────────────────────────────────────────────
+
+// A sensor's `blocked` reading gates ports. Physical sensors (those that also
+// carry DetectionVolumeComponent) are auto-updated by sensor::scan from item
+// poses overlapping the volume. Virtual sensors (no DetectionVolumeComponent)
+// have their reading written by orchestration code (typically station::step).
+struct SensorComponent {
+    bool blocked() const { return blocked_; }
+    void set_blocked(bool b) { blocked_ = b; }
+
+private:
+    bool blocked_ = false;
+};
+
+// Presence of this component marks a sensor as physical. The volume is in
+// the sensor entity's local frame; orientation comes from PoseComponent's
+// parent chain (typically the parent port's forward direction).
+struct DetectionVolumeComponent {
+    int length_mm() const { return length_mm_; }
+    int width_mm()  const { return width_mm_; }
+    int height_mm() const { return height_mm_; }
+
+    void set_dimensions(int L, int W, int H) {
+        length_mm_ = detail::positive(L);
+        width_mm_  = detail::positive(W);
+        height_mm_ = detail::positive(H);
+    }
+
+private:
+    int length_mm_ = 100;
+    int width_mm_  = 100;
+    int height_mm_ = 100;
+};
+
 // ── Transport / workflow ──────────────────────────────────────────────────────
 
 struct TransportComponent {
-    bool running()  const { return running_; }
-    int  capacity() const { return capacity_; }
-
-    void set_running(bool r) { running_  = r; }
-    void set_capacity(int c) { capacity_ = detail::non_neg(c); }
+    bool running() const { return running_; }
+    void set_running(bool r) { running_ = r; }
 
 private:
-    bool running_  = true;
-    int  capacity_ = 0;
+    bool running_ = true;
 };
 
 struct ConveyorBeltComponent {
-    const std::string& catalog_ref()          const { return catalog_ref_; }
-    int                width_mm()             const { return width_mm_; }
-    int                length_mm()            const { return length_mm_; }
-    int                surface_height_mm()    const { return surface_height_mm_; }
-    int                opening_clearance_mm() const { return opening_clearance_mm_; }
-    float              belt_speed_mm_s()      const { return belt_speed_mm_s_; }
-    Vec3               dir()                  const { return dir_; }
-    entt::entity       entry_port()           const { return entry_port_; }
-    entt::entity       exit_port()            const { return exit_port_; }
-    bool               capacity_blocked()     const { return capacity_blocked_; }
+    const std::string&               catalog_ref()          const { return catalog_ref_; }
+    int                              width_mm()             const { return width_mm_; }
+    int                              length_mm()            const { return length_mm_; }
+    int                              surface_height_mm()    const { return surface_height_mm_; }
+    int                              opening_clearance_mm() const { return opening_clearance_mm_; }
+    float                            belt_speed_mm_s()      const { return belt_speed_mm_s_; }
+    Vec3                             dir()                  const { return dir_; }
+    entt::entity                     entry_port()           const { return entry_port_; }
+    entt::entity                     exit_port()            const { return exit_port_; }
+    const std::vector<entt::entity>& tap_ports()            const { return tap_ports_; }
+    const std::vector<entt::entity>& gate_ports()           const { return gate_ports_; }
 
     void set_catalog_ref(std::string r)         { catalog_ref_          = std::move(r); }
     void set_width_mm(int mm)                   { width_mm_             = detail::positive(mm); }
@@ -105,37 +136,86 @@ struct ConveyorBeltComponent {
     void set_dir(Vec3 d)                        { dir_                  = d; }
     void set_entry_port(entt::entity e)         { entry_port_           = e; }
     void set_exit_port(entt::entity e)          { exit_port_            = e; }
-    void set_capacity_blocked(bool b)           { capacity_blocked_     = b; }
+    void add_tap_port(entt::entity e)           { tap_ports_.push_back(detail::valid_entity(e)); }
+    void add_gate_port(entt::entity e)          { gate_ports_.push_back(detail::valid_entity(e)); }
 
 private:
-    std::string  catalog_ref_          = "generic/flat-belt";
-    int          width_mm_             = 200;
-    int          length_mm_            = 2000;
-    int          surface_height_mm_    = 800;
-    int          opening_clearance_mm_ = 50;
-    float        belt_speed_mm_s_      = 200.f;
-    Vec3         dir_                  = {1.f, 0.f, 0.f};
-    entt::entity entry_port_           = entt::null;
-    entt::entity exit_port_            = entt::null;
-    bool         capacity_blocked_     = false;
+    std::string               catalog_ref_          = "generic/flat-belt";
+    int                       width_mm_             = 200;
+    int                       length_mm_            = 2000;
+    int                       surface_height_mm_    = 800;
+    int                       opening_clearance_mm_ = 50;
+    float                     belt_speed_mm_s_      = 200.f;
+    Vec3                      dir_                  = {1.f, 0.f, 0.f};
+    entt::entity              entry_port_           = entt::null;
+    entt::entity              exit_port_            = entt::null;
+    std::vector<entt::entity> tap_ports_;
+    std::vector<entt::entity> gate_ports_;
+};
+
+// ── Pickers ───────────────────────────────────────────────────────────────────
+
+enum class PickerState : uint8_t { Idle, MovingToBox, Carrying, Returning };
+
+struct PickerTransportComponent {
+    Vec3         home_pose()        const { return home_pose_; }
+    Vec3         pickup_target()    const { return pickup_target_; }
+    Vec3         drop_target()      const { return drop_target_; }
+    entt::entity drop_container()   const { return drop_container_; }
+    Quat         drop_orientation() const { return drop_orientation_; }
+    float        speed_mm_s()       const { return speed_mm_s_; }
+    PickerState  state()            const { return state_; }
+    entt::entity current_box()      const { return current_box_; }
+
+    void set_home_pose(Vec3 v)             { home_pose_      = v; }
+    void set_pickup_target(Vec3 v)         { pickup_target_  = v; }
+    void set_drop_target(Vec3 v)           { drop_target_    = v; }
+    void set_drop_container(entt::entity e){ drop_container_ = e; }
+    void set_drop_orientation(Quat q)      { drop_orientation_ = q; }
+    void set_speed_mm_s(float v)           { speed_mm_s_     = detail::finite_non_neg(v); }
+    void set_state(PickerState s)          { state_          = s; }
+    void set_current_box(entt::entity e)   { current_box_    = e; }
+
+private:
+    Vec3         home_pose_        = Vec3{0.f};
+    Vec3         pickup_target_    = Vec3{0.f};
+    Vec3         drop_target_      = Vec3{0.f};
+    entt::entity drop_container_   = entt::null;
+    Quat         drop_orientation_ = Quat{1.f, 0.f, 0.f, 0.f};
+    float        speed_mm_s_       = 500.f;
+    PickerState  state_            = PickerState::Idle;
+    entt::entity current_box_      = entt::null;
 };
 
 // ── Ports ─────────────────────────────────────────────────────────────────────
 
 struct PortComponent {
-    const std::string& name()        const { return name_; }
-    entt::entity       transport()   const { return transport_; }
-    float              min_gap_mm()  const { return min_gap_mm_; }
+    const std::string&               name()      const { return name_; }
+    entt::entity                     transport() const { return transport_; }
+    const std::vector<entt::entity>& sensors()   const { return sensors_; }
 
-    void set_name(std::string n)       { name_       = std::move(n); }
-    void set_transport(entt::entity e) { transport_  = e; }
-    void set_min_gap_mm(float v)       { min_gap_mm_ = detail::finite_non_neg(v); }
+    void set_name(std::string n)       { name_      = std::move(n); }
+    void set_transport(entt::entity e) { transport_ = e; }
+    void add_sensor(entt::entity e)    { sensors_.push_back(detail::valid_entity(e)); }
 
 private:
-    std::string  name_;
-    entt::entity transport_  = entt::null;
-    float        min_gap_mm_ = 0.f;
+    std::string               name_;
+    entt::entity              transport_ = entt::null;
+    std::vector<entt::entity> sensors_;
 };
+
+// A port is "clear" iff every sensor in its list reads not-blocked.
+// A port with no sensors is always clear.
+inline bool port_is_clear(const entt::registry& reg, entt::entity port_e) {
+    if (port_e == entt::null) return true;
+    const auto* p = reg.try_get<PortComponent>(port_e);
+    if (!p) return true;
+    for (auto s : p->sensors()) {
+        const auto* sc = reg.try_get<SensorComponent>(s);
+        if (sc && sc->blocked()) return false;
+    }
+    return true;
+}
 
 // ── Source / Sink ─────────────────────────────────────────────────────────────
 
@@ -209,23 +289,23 @@ private:
 // ── Pallet ────────────────────────────────────────────────────────────────────
 
 struct PalletComponent {
-    int                              length_mm()          const { return length_mm_; }
-    int                              width_mm()           const { return width_mm_; }
-    int                              height_mm()          const { return height_mm_; }
+    int                              length_mm()           const { return length_mm_; }
+    int                              width_mm()            const { return width_mm_; }
+    int                              height_mm()           const { return height_mm_; }
     int                              max_stack_height_mm() const { return max_stack_height_mm_; }
-    const std::vector<entt::entity>& items()              const { return items_; }
+    const std::vector<entt::entity>& items()               const { return items_; }
 
-    void set_length_mm(int mm)          { length_mm_          = detail::positive(mm); }
-    void set_width_mm(int mm)           { width_mm_           = detail::positive(mm); }
-    void set_height_mm(int mm)          { height_mm_          = detail::positive(mm); }
-    void set_max_stack_height_mm(int mm){ max_stack_height_mm_ = detail::positive(mm); }
-    void add_item(entt::entity e)       { items_.push_back(e); }
+    void set_length_mm(int mm)           { length_mm_           = detail::positive(mm); }
+    void set_width_mm(int mm)            { width_mm_            = detail::positive(mm); }
+    void set_height_mm(int mm)           { height_mm_           = detail::positive(mm); }
+    void set_max_stack_height_mm(int mm) { max_stack_height_mm_ = detail::positive(mm); }
+    void add_item(entt::entity e)        { items_.push_back(e); }
 
 private:
-    int                      length_mm_          = 1200;
-    int                      width_mm_           = 800;
-    int                      height_mm_          = 145;
-    int                      max_stack_height_mm_ = 1500;
+    int                       length_mm_           = 1200;
+    int                       width_mm_            = 800;
+    int                       height_mm_           = 145;
+    int                       max_stack_height_mm_ = 1500;
     std::vector<entt::entity> items_;
 };
 

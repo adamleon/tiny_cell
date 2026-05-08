@@ -1,4 +1,49 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 # TinyCell — Claude Code conventions
+
+## Build & test
+
+First-time configure (Release, with compile_commands.json for clangd):
+
+    cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+Build everything:
+
+    cmake --build build --parallel
+
+Build only the tests (CI-equivalent — no OpenGL/X11 deps needed):
+
+    cmake --build build --target TestCell TestSolver TestFactoryScene TestSim
+
+Run all tests:
+
+    ctest --test-dir build --output-on-failure
+
+Run a single test binary directly. Tests load assets via relative paths, so run from the repo root:
+
+    ./build/TestSim
+
+Demos are the only application entry points — there is no monolithic app. Build and run by name:
+
+    cmake --build build --target palletizing
+    ./build/palletizing
+
+Demos require OpenGL/X11 system libs. CI disables them with `-DTINYCELL_BUILD_DEMOS=OFF`.
+
+## Architecture
+
+Three layers, bottom-up:
+
+1. **`src/solver/`** — pure functions over POD types. No ECS, no threepp. Takes a `SolverInput` + a panel `LookupTable` (loaded from `combinations.json`) and returns a `SolverOutput` with stable `EntityId`s. `cell/fence_solver.hpp` owns the JSON loader; `solver/solver.hpp` is the computation.
+
+2. **`src/factory_scene/`** — the ECS world (EnTT). `FactoryScene` wraps an `entt::registry` plus a `solver::EntityId ↔ entt::entity` bimap so solver output round-trips into components. The simulation is split into four headers: `sensor_systems.hpp` (refresh physical-sensor `blocked` flags), `transport_systems.hpp` (belt motion + picker state machine), `station_systems.hpp` (pure dispatch — claim pallet, assign pickers, write virtual sensors), `lifecycle_systems.hpp` (source spawn + sink despawn, returns spawned/despawned events for the demo to consume). Tick order is the order above. `render_system.hpp` reflects ECS state into threepp meshes — see *sim / render separation* below. The full transport / port / sensor / station model is in [docs/TRANSPORT_MODEL.md](docs/TRANSPORT_MODEL.md).
+
+3. **`src/demos/`** — top-level executables that wire a `FactoryScene` to a threepp window via `common/scene_setup.hpp`.
+
+Dependencies are vendored via CMake FetchContent: **threepp is pinned to a specific commit hash** (see `CMakeLists.txt`) — bumping it is a deliberate change, not automatic. EnTT 3.16, GLM 1.0.3.
 
 ## Component design rules
 
@@ -41,9 +86,9 @@ private:
 
 ## sim / render separation
 
-- `sim_systems.hpp` is pure ECS — no threepp types.
+- The four sim headers (`sensor_systems.hpp`, `transport_systems.hpp`, `station_systems.hpp`, `lifecycle_systems.hpp`) are pure ECS — no threepp types.
 - `render_system.hpp` reads ECS state and writes threepp objects — no simulation logic.
-- `sim::step()` returns `StepEvents`; the render loop is responsible for creating and removing meshes.
+- `lifecycle::step()` returns `LifecycleEvents { spawned, despawned }`; the render loop is responsible for creating and removing meshes (and destroying the corresponding entities).
 
 ## Testing
 

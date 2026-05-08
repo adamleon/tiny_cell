@@ -168,7 +168,7 @@ public:
     // ── Transport / workflow ──────────────────────────────────────────────────
 
     entt::entity add_belt(int width_mm, int length_mm, int surface_height_mm,
-                          float speed_mm_s, Vec3 dir, int capacity = 0) {
+                          float speed_mm_s, Vec3 dir) {
         auto e   = registry_.create();
         auto& bc = registry_.emplace<ConveyorBeltComponent>(e);
         bc.set_width_mm(width_mm);
@@ -176,7 +176,7 @@ public:
         bc.set_surface_height_mm(surface_height_mm);
         bc.set_belt_speed_mm_s(speed_mm_s);
         bc.set_dir(dir);
-        registry_.emplace<TransportComponent>(e).set_capacity(capacity);
+        registry_.emplace<TransportComponent>(e);
         return e;
     }
 
@@ -189,25 +189,22 @@ public:
         return n;
     }
 
-    bool transport_has_capacity(entt::entity transport) const {
-        const auto* tc = registry_.try_get<TransportComponent>(transport);
-        if (!tc || !tc->running()) return false;
-        return tc->capacity() == 0 || items_on(transport) < tc->capacity();
-    }
-
-    bool transport_has_space(entt::entity transport) const {
-        const auto* tc = registry_.try_get<TransportComponent>(transport);
-        if (!tc) return false;
-        return tc->capacity() == 0 || items_on(transport) < tc->capacity();
-    }
-
-    entt::entity add_port(const std::string& name, Vec3 position) {
+    // Add a port at world `position` with local +x oriented along `forward`
+    // (yaw quaternion in the X-Y plane). Defaults to world +x. Sensors that
+    // reference this port inherit this orientation through PoseComponent's
+    // parent chain.
+    entt::entity add_port(const std::string& name, Vec3 position,
+                          Vec3 forward = Vec3{1.f, 0.f, 0.f}) {
         auto e   = registry_.create();
         auto& pc = registry_.emplace<PortComponent>(e);
         pc.set_name(name);
-        auto& pose    = registry_.emplace<PoseComponent>(e);
+        auto& pose = registry_.emplace<PoseComponent>(e);
         pose.position = position;
-        pose.parent   = root_entity();
+        if (glm::dot(forward, forward) > 0.f) {
+            float yaw = std::atan2(forward.y, forward.x);
+            pose.orientation = glm::angleAxis(yaw, Vec3{0.f, 0.f, 1.f});
+        }
+        pose.parent = root_entity();
         return e;
     }
 
@@ -215,11 +212,85 @@ public:
         auto& bc = registry_.get<ConveyorBeltComponent>(belt);
         bc.set_entry_port(entry_port);
         bc.set_exit_port(exit_port);
+        // Default: exit_port gates belt motion (downstream-blocked behaviour).
+        bc.add_gate_port(exit_port);
     }
 
     void set_port_transport(entt::entity port, entt::entity transport) {
         registry_.get<PortComponent>(port).set_transport(transport);
     }
+
+    // ── Sensors ───────────────────────────────────────────────────────────────
+
+    // Physical sensor: parented to `port` with `local_offset` and a detection
+    // volume. The scan system updates `blocked` from item poses each tick.
+    entt::entity add_physical_sensor(entt::entity port,
+                                     int length_mm, int width_mm, int height_mm,
+                                     Vec3 local_offset = Vec3{0.f}) {
+        auto e = registry_.create();
+        registry_.emplace<SensorComponent>(e);
+        registry_.emplace<DetectionVolumeComponent>(e)
+                 .set_dimensions(length_mm, width_mm, height_mm);
+        auto& pose = registry_.emplace<PoseComponent>(e);
+        pose.position = local_offset;
+        pose.parent   = port;
+        registry_.get<PortComponent>(port).add_sensor(e);
+        return e;
+    }
+
+    // Virtual sensor: presence in a port's sensor list, but no detection
+    // volume — `blocked` is written by orchestration code.
+    entt::entity add_virtual_sensor(entt::entity port) {
+        auto e = registry_.create();
+        registry_.emplace<SensorComponent>(e);
+        auto& pose = registry_.emplace<PoseComponent>(e);
+        pose.parent = port;
+        registry_.get<PortComponent>(port).add_sensor(e);
+        return e;
+    }
+
+    // ── Pickers and tap ports ────────────────────────────────────────────────
+
+    entt::entity add_picker(Vec3 home_pose, float speed_mm_s) {
+        auto e = registry_.create();
+        registry_.emplace<TransportComponent>(e);
+        auto& pt = registry_.emplace<PickerTransportComponent>(e);
+        pt.set_home_pose(home_pose);
+        pt.set_speed_mm_s(speed_mm_s);
+        auto& pose = registry_.emplace<PoseComponent>(e);
+        pose.position = home_pose;
+        pose.parent   = root_entity();
+        return e;
+    }
+
+    // Add a port at distance `position_mm` along the belt's direction from
+    // the entry port. The new port is parented to the belt's entry port so
+    // its world transform follows the belt's orientation automatically.
+    entt::entity add_tap_port(entt::entity belt, const std::string& name, int position_mm) {
+        auto& bc      = registry_.get<ConveyorBeltComponent>(belt);
+        auto entry_e  = bc.entry_port();
+        assert(entry_e != entt::null && "connect_belt must be called before add_tap_port");
+
+        auto e   = registry_.create();
+        auto& pc = registry_.emplace<PortComponent>(e);
+        pc.set_name(name);
+        auto& pose = registry_.emplace<PoseComponent>(e);
+        // Local +x of the entry port aligns with belt direction by construction
+        // (add_port set its yaw from the forward vector, which connect_belt
+        // implicitly assumes matches the belt's dir).
+        pose.position = Vec3{static_cast<float>(position_mm), 0.f, 0.f};
+        pose.parent   = entry_e;
+        bc.add_tap_port(e);
+        return e;
+    }
+
+    // Promote a port (typically a tap port) to a gate port — its blocked
+    // sensors will now freeze the belt.
+    void make_gate_port(entt::entity belt, entt::entity port) {
+        registry_.get<ConveyorBeltComponent>(belt).add_gate_port(port);
+    }
+
+    // ── Items ────────────────────────────────────────────────────────────────
 
     entt::entity add_prototype(int length_mm, int width_mm, int height_mm, uint32_t color_hex) {
         auto e  = registry_.create();

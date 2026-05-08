@@ -1,111 +1,163 @@
 #pragma once
+#include <cmath>
 #include <entt/entt.hpp>
-#include "station_components.hpp"
+#include <glm/glm.hpp>
+#include "components.hpp"
 #include "factory_scene.hpp"
-#include "sim_systems.hpp"
+#include "sensor_systems.hpp"
+#include "station_components.hpp"
+#include "pose_component.hpp"
 
 namespace factory::station {
 
-inline void step(FactoryScene& scene,
-                 std::vector<sim::ItemArrivedAtPort>& arrived,
-                 float dt)
-{
+namespace detail {
+
+// Return the first SpawnedItem whose bounding box intersects any physical
+// sensor on `port_e`'s sensor list. Returns entt::null when no match.
+inline entt::entity find_item_at_port(const entt::registry& reg, entt::entity port_e) {
+    if (port_e == entt::null) return entt::null;
+    const auto* port = reg.try_get<PortComponent>(port_e);
+    if (!port) return entt::null;
+
+    auto items = reg.view<SpawnedItemComponent, PoseComponent>();
+
+    for (auto sensor_e : port->sensors()) {
+        for (auto item_e : items) {
+            if (sensor::item_in_volume(reg, item_e, sensor_e))
+                return item_e;
+        }
+    }
+    return entt::null;
+}
+
+}  // namespace detail
+
+// Pure dispatch — runs after sensors and transports have refreshed.
+inline void step(FactoryScene& scene, float /*dt*/) {
     auto& reg = scene.registry();
 
-    auto restart_transport = [&](entt::entity transport) {
-        if (transport == entt::null) return;
-        auto& tc = reg.get<TransportComponent>(transport);
-        tc.set_running(true);
-        auto* bc = reg.try_get<ConveyorBeltComponent>(transport);
-        if (bc) bc->set_capacity_blocked(false);
-    };
+    for (auto&& [station_e, sc] : reg.view<StationComponent>().each()) {
+        auto* pc = reg.try_get<PalletizeComponent>(station_e);
 
-    auto stop_transport = [&](entt::entity transport) {
-        if (transport == entt::null) return;
-        reg.get<TransportComponent>(transport).set_running(false);
-    };
-
-    for (auto&& [station_ent, sc] : reg.view<StationComponent>().each()) {
-        auto* pc = reg.try_get<PalletizeComponent>(station_ent);
-
-        // Grab incoming pallet
-        if (pc && pc->state() == PalletizeState::WaitingForPallet) {
-            // Hold box belt until we have a pallet to fill
-            stop_transport(sc.controlled_transport());
-
-            for (auto& arr : arrived) {
-                if (arr.port != pc->pallet_arrival_port()) continue;
-                auto& palletc = reg.emplace_or_replace<PalletComponent>(arr.item);
+        // ── Pallet acquisition ──────────────────────────────────────────────
+        // Only claim a pallet that does NOT already carry a PalletComponent —
+        // presence of that component means the pallet has been claimed before
+        // (and likely just released). Without this guard, the released pallet
+        // sits in the detect sensor's volume for many ticks while it advances
+        // out, and the station re-claims it every tick, locking the cycle.
+        if (pc && pc->current_pallet() == entt::null) {
+            auto pallet_item = detail::find_item_at_port(reg, pc->pallet_arrival_port());
+            if (pallet_item != entt::null && !reg.any_of<PalletComponent>(pallet_item)) {
+                pc->set_current_pallet(pallet_item);
+                auto& palletc = reg.emplace<PalletComponent>(pallet_item);
                 palletc.set_length_mm(pc->pallet_length_mm());
                 palletc.set_width_mm(pc->pallet_width_mm());
                 palletc.set_height_mm(pc->pallet_height_mm());
                 palletc.set_max_stack_height_mm(pc->pallet_max_stack_mm());
-                pc->set_current_pallet(arr.item);
-                pc->set_state(PalletizeState::HasPallet);
-                stop_transport(pc->pallet_segment());
-                restart_transport(sc.controlled_transport());
-                arr.port = entt::null;
+                if (pc->pallet_tap_virtual_sensor() != entt::null)
+                    reg.get<SensorComponent>(pc->pallet_tap_virtual_sensor()).set_blocked(true);
+            }
+        }
+
+        const bool has_pallet = !pc || pc->current_pallet() != entt::null;
+
+        // ── Find an idle picker ────────────────────────────────────────────
+        entt::entity idle_picker = entt::null;
+        for (auto p : sc.pickers()) {
+            auto* pt = reg.try_get<PickerTransportComponent>(p);
+            if (pt && pt->state() == PickerState::Idle) {
+                idle_picker = p;
                 break;
             }
         }
 
-        // Grab incoming item
-        if (sc.state() == StationState::Idle &&
-            (!pc || pc->state() == PalletizeState::HasPallet))
-        {
-            for (auto& arr : arrived) {
-                if (arr.port != sc.arrival_port()) continue;
-                sc.capture(arr.item);
-                stop_transport(sc.controlled_transport());
-                sc.mechanism()->start(arr.item, reg);
-                arr.port = entt::null;
-                break;
+        // ── Box dispatch ────────────────────────────────────────────────────
+        if (has_pallet && idle_picker != entt::null && pc) {
+            auto box_item = detail::find_item_at_port(reg, sc.arrival_port());
+            if (box_item != entt::null) {
+                bool already_claimed = false;
+                for (auto p : sc.pickers()) {
+                    auto* pt = reg.try_get<PickerTransportComponent>(p);
+                    if (pt && pt->current_box() == box_item) {
+                        already_claimed = true;
+                        break;
+                    }
+                }
+                if (!already_claimed && pc->pattern()) {
+                    auto& palletc = reg.get<PalletComponent>(pc->current_pallet());
+                    auto* sp = reg.try_get<SpawnedItemComponent>(box_item);
+                    if (sp) {
+                        auto* proto = reg.try_get<ItemPrototypeComponent>(sp->prototype());
+                        if (proto) {
+                            auto slot = pc->pattern()->next_pose(palletc, *proto, reg);
+                            if (slot.has_value()) {
+                                glm::mat4 pallet_world  = world_transform(pc->current_pallet(), reg);
+                                glm::vec4 drop_world    = pallet_world * glm::vec4(slot->position, 1.f);
+                                glm::mat4 box_w         = world_transform(box_item, reg);
+
+                                auto& picker = reg.get<PickerTransportComponent>(idle_picker);
+                                picker.set_pickup_target(Vec3(box_w[3]));
+                                picker.set_drop_target(Vec3(drop_world));
+                                picker.set_drop_container(pc->current_pallet());
+                                picker.set_drop_orientation(slot->orientation);
+                                picker.set_current_box(box_item);
+                                picker.set_state(PickerState::MovingToBox);
+                            }
+                        }
+                    }
+                }
             }
         }
 
-        // Tick mechanism
-        if (sc.state() != StationState::Processing) continue;
-        sc.mechanism()->tick(dt, reg);
-        if (!sc.mechanism()->done()) continue;
+        // ── Update arrival virtual sensor ──────────────────────────────────
+        // Blocked iff station can't accept a new box right now.
+        if (sc.arrival_virtual_sensor() != entt::null) {
+            bool blocked = !has_pallet;
+            if (!blocked) {
+                bool any_idle = false;
+                for (auto p : sc.pickers()) {
+                    auto* pt = reg.try_get<PickerTransportComponent>(p);
+                    if (pt && pt->state() == PickerState::Idle) {
+                        any_idle = true;
+                        break;
+                    }
+                }
+                blocked = !any_idle;
+            }
+            reg.get<SensorComponent>(sc.arrival_virtual_sensor()).set_blocked(blocked);
+        }
 
-        if (pc && pc->state() == PalletizeState::HasPallet) {
-            auto  pallet_e = pc->current_pallet();
-            auto& palletc  = reg.get<PalletComponent>(pallet_e);
-            const auto& sp = reg.get<SpawnedItemComponent>(sc.held_item());
-            const auto* proto = reg.try_get<ItemPrototypeComponent>(sp.prototype());
-
-            if (proto) {
-                if (auto placement = pc->pattern()->next_pose(palletc, *proto, reg)) {
-                    auto& item_pose       = reg.get<PoseComponent>(sc.held_item());
-                    item_pose.position    = placement->position;
-                    item_pose.orientation = placement->orientation;
-                    item_pose.parent      = pallet_e;
-                    palletc.add_item(sc.held_item());
+        // ── Pallet release (full + pickers idle) ───────────────────────────
+        if (pc && pc->current_pallet() != entt::null) {
+            bool all_idle = true;
+            for (auto p : sc.pickers()) {
+                auto* pt = reg.try_get<PickerTransportComponent>(p);
+                if (pt && pt->state() != PickerState::Idle) {
+                    all_idle = false;
+                    break;
                 }
             }
 
-            sc.release();
-
-            bool full = proto && !pc->pattern()->next_pose(palletc, *proto, reg).has_value();
-
-            if (full) {
-                auto& out_bc      = reg.get<ConveyorBeltComponent>(pc->pallet_output_transport());
-                auto& entry_pose  = reg.get<PoseComponent>(out_bc.entry_port());
-                auto& pal_pose    = reg.get<PoseComponent>(pallet_e);
-                pal_pose.position = entry_pose.position;
-                pal_pose.parent   = scene.root_entity();
-                reg.emplace_or_replace<ItemOnTransportComponent>(pallet_e)
-                   .set_transport(pc->pallet_output_transport());
-                pc->set_current_pallet(entt::null);
-                pc->set_state(PalletizeState::WaitingForPallet);
-                restart_transport(pc->pallet_segment());
-                // box belt stays stopped — WaitingForPallet will hold it
-            } else {
-                restart_transport(sc.controlled_transport());
+            // Pallet "full" iff pattern returns nullopt for the next slot.
+            // We need an item prototype to query the pattern; use the prototype
+            // of the first placed item.
+            bool full = false;
+            auto& palletc = reg.get<PalletComponent>(pc->current_pallet());
+            if (!palletc.items().empty() && pc->pattern()) {
+                auto first  = palletc.items().front();
+                auto* sp    = reg.try_get<SpawnedItemComponent>(first);
+                if (sp) {
+                    auto* proto = reg.try_get<ItemPrototypeComponent>(sp->prototype());
+                    if (proto)
+                        full = !pc->pattern()->next_pose(palletc, *proto, reg).has_value();
+                }
             }
-        } else {
-            sc.release();
-            restart_transport(sc.controlled_transport());
+
+            if (full && all_idle) {
+                pc->set_current_pallet(entt::null);
+                if (pc->pallet_tap_virtual_sensor() != entt::null)
+                    reg.get<SensorComponent>(pc->pallet_tap_virtual_sensor()).set_blocked(false);
+            }
         }
     }
 }

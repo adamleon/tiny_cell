@@ -4,7 +4,7 @@
 
 The scene is managed as an Entity-Component-System using **EnTT**. The `FactoryScene` wraps an EnTT registry and is the **single source of truth** for all scene state. Every visible or interactive element in the scene is an entity.
 
-This document covers the entity types, components, systems, and the rules for extending the system. For how the layout solver uses entity data, see [LAYOUT_SOLVER.md](LAYOUT_SOLVER.md).
+This document covers the entity types, components, systems, and the rules for extending the system. For how the layout solver uses entity data, see [LAYOUT_SOLVER.md](LAYOUT_SOLVER.md). For the simulation architecture (transports, ports, sensors, station dispatch), see [TRANSPORT_MODEL.md](TRANSPORT_MODEL.md) — that document is the source of truth for everything transport- and station-related; this document gives the catalogue summary.
 
 ---
 
@@ -28,14 +28,17 @@ Every visible or interactive element is an entity, referenced by a stable `entt:
 | DeclaredOpening | User (may be unallocated — no edge yet) | Pose, DeclaredOpening, Visual *(future)*, Interactive *(future)* |
 | WorldFeature | User / blueprint import | Pose, WorldFeature *(future)*, Visual *(future)*, Interactive *(future)* |
 | SpanConstraint | User / blueprint import | Pose, SpanConstraint *(future)*, Interactive *(future)* |
-| Robot | User / blueprint import | Pose, Robot *(future)*, Visual *(future)*, Interactive *(future)*, Simulation *(future)* |
-| ConveyorBelt | User / workflow *(future)* | Pose, Transport, ConveyorBelt, FlowNode, Visual *(future)*, Interactive *(future)*, Simulation *(future)* |
-| Station | User / workflow *(future)* | Pose, Station, *type-specific*, Visual *(future)* |
-| PalletizingStation | User / workflow *(future)* | Pose, Station, PalletizingStation, Visual *(future)* |
-| Mechanism | Solver | Pose, Mechanism, *type-specific*, Visual *(future)*, Simulation *(future)* |
-| SpawnItem | User / workflow *(future)* | Pose, SpawnItem, FlowNode, Visual *(future)* |
-| DespawnItem | User / workflow *(future)* | Pose, DespawnItem, FlowNode, Visual *(future)* |
-| WorkPiece | Simulation | Pose, Visual *(future)*, Simulation *(future)* |
+| Robot | User / blueprint import | Pose, Robot *(future)*, Visual *(future)*, Interactive *(future)* |
+| ConveyorBelt | User / workflow *(future)* | Pose, Transport, ConveyorBelt, Visual *(future)*, Interactive *(future)* |
+| Port | User / workflow *(future)* | Pose, Port |
+| Sensor | User / workflow *(future)* | Pose, Sensor, DetectionVolume *(physical sensors only)* |
+| Picker | User / workflow *(future)* | Pose, Transport, PickerTransport, Visual *(future)* |
+| Station | User / workflow *(future)* | Pose, Station, *type-specific* (Palletize, …), Visual *(future)* |
+| Source | User / workflow *(future)* | Pose, Source, Visual *(future)* |
+| Sink | User / workflow *(future)* | Pose, Sink, Visual *(future)* |
+| ItemPrototype | User / workflow *(future)* | ItemPrototype |
+| SpawnedItem | LifecycleSystem | Pose, SpawnedItem, ItemOnTransport (when riding a transport), Visual *(future)* |
+| Pallet | LifecycleSystem (as a SpawnedItem variant) | Pose, SpawnedItem, Pallet, ItemOnTransport (when riding), Visual *(future)* |
 
 An entity's role is determined by which components it carries — there is no discriminator field. `FactoryScene` is the only place that creates entities and attaches components, which prevents nonsense combinations.
 
@@ -109,51 +112,52 @@ DeclaredOpeningComponent
 
 `None` is the default and the only type currently implemented. `Open` and `Solid` are defined in the schema now so that future rendering work has a stable target.
 
-The solver may group multiple belt pass-throughs into a single `Open` opening when the combined width plus clearances fits within a standard panel span (e.g. five 100 mm belts grouped into one 750 mm opening). When this happens, the solver writes a single `DeclaredOpeningComponent` with the combined width; the individual belt connections are tracked via their `FlowNodeComponent` references, not by separate openings.
+The solver may group multiple belt pass-throughs into a single `Open` opening when the combined width plus clearances fits within a standard panel span (e.g. five 100 mm belts grouped into one 750 mm opening). When this happens, the solver writes a single `DeclaredOpeningComponent` with the combined width; the individual belt connections are tracked via each belt's own `entry_port` / `exit_port` references, not by separate openings.
 
 Allocation state is determined entirely by which optional fields are set — no separate flag. See [LAYOUT_SOLVER.md](LAYOUT_SOLVER.md) for how the solver handles each allocation state.
 
-### FlowNodeComponent
+### PortComponent
 
-Carried by every entity that participates in item flow: `ConveyorBelt`, `SpawnItem`, `DespawnItem`, and any future station type (robot cells, buffers, etc.).
-
-```
-FlowNodeComponent
-  entry  entt::entity   — upstream entity (null if this is a source)
-  exit   entt::entity   — downstream entity (null if this is a sink)
-```
-
-This forms a singly-linked directed graph of item flow using plain `entt::entity` handles. No special "workflow node" base type is needed — any entity carrying `FlowNodeComponent` can appear anywhere in the graph.
-
-Example — two belts in series:
+Carried by every entity that exposes a connection point along or between transports. Hosts a list of sensors (sensor entities) that gate flow at this port.
 
 ```
-SpawnItem  →  Belt1  →  Belt2  →  DespawnItem
-  exit=Belt1   entry=SpawnItem   entry=Belt1    entry=Belt2
-               exit=Belt2        exit=DespawnItem  exit=null
+PortComponent
+  name        string
+  transport   entt::entity         — destination transport for items handed off here; null at sink-side or station-arrival points
+  sensors     vector<entt::entity> — sensor entities; the port is "clear" iff every sensor reads not-blocked
 ```
 
-The workflow solver (future) will build and validate these graphs. For current demos, the graph is wired manually in code.
+Transport flow connectivity is expressed via PortComponents on transports: a belt's `entry_port` and `exit_port` reference Port entities, a port's `transport` field references the next transport in the chain, sources reference an `out_port`, and sinks reference an `in_port`. No separate "FlowNode" component is needed.
+
+The same sensor entity may appear in multiple ports' lists — this is how a single virtual sensor (e.g. "station busy") can gate several belts at once. See [TRANSPORT_MODEL.md](TRANSPORT_MODEL.md) for the full sensor and gating model.
 
 ### StationComponent
 
-Carried by every station entity alongside a station-type-specific component. Holds what all stations share.
+Carried by every station entity alongside a station-type-specific component (PalletizeComponent for palletizers, etc.). The station is a **dispatcher**: it reads sensors, runs assignment logic, and writes virtual sensors. It does **not** own items.
 
 ```
 StationComponent
-  name:      string
-  mechanism: entt::entity   — the actor performing work (null until solver places one)
+  arrival_port              entt::entity         — where items arrive for processing
+  arrival_virtual_sensor    entt::entity         — virtual sensor on arrival_port that the station drives
+  pickers                   vector<entt::entity> — pool of pickers this station dispatches to
 ```
 
-The mechanism is a separate entity carrying its own specific component. What kind of mechanism it is — robot arm, diverter flap, pneumatic pusher — is determined entirely by which components that entity carries. The station does not discriminate.
+All in-flight work lives on the picker(s). Multi-picker stations are a matter of populating `pickers` with more than one entity. See [TRANSPORT_MODEL.md](TRANSPORT_MODEL.md) for the dispatch model.
 
-### MechanismComponent
+### PickerTransportComponent
 
-Marker component on mechanism entities. Every mechanism carries this alongside its type-specific component.
+Carried by picker entities — autonomous transports that grasp and carry items between named locations. A picker is a self-driving state machine; once a station populates its job fields and sets `state = MovingToBox`, the picker handles its own transitions.
 
 ```
-MechanismComponent
-  (no fields — presence identifies the entity as a mechanism)
+PickerTransportComponent
+  home_pose          Vec3
+  pickup_target      Vec3
+  drop_target        Vec3
+  drop_container     entt::entity   — entity to parent the box to on placement; null = leave at world pose
+  drop_orientation   Quat
+  speed_mm_s         float
+  state              PickerState    — Idle | MovingToBox | Carrying | Returning
+  current_box        entt::entity   — null when Idle
 ```
 
 ### RobotArmComponent *(future)*
@@ -167,52 +171,148 @@ RobotArmComponent
 
 Robot position is always **solver output**. The robot placement solver takes the set of required reach poses (pick and place positions derived from belt geometry and stack pattern) and finds the optimal base position within the robot's workspace. The objective function is configurable: minimise energy (minimise total joint travel), minimise cycle time, or minimise footprint. The solver must also verify that all required poses lie within the reachable annulus — not just the reach sphere, which has a dead zone below the base and joint-limit exclusions.
 
-### PalletizingStationComponent
+When a robot arm is added, it will be a **transport variant** — likely composed as `Pose + Transport + RobotArm + PickerTransport` so the dispatch logic in `StationSystem` does not need to discriminate between a generic picker and a robot-arm picker.
+
+### PalletizeComponent
+
+Type-specific addition to a station for palletizing. Combined with `StationComponent` on the same entity.
 
 ```
-PalletizingStationComponent
-  box_belt:           entt::entity   — belt delivering boxes; robot picks from end
-  pallet_belt:        entt::entity   — belt that carries pallet in and out
-  item_definition:    entt::entity   — the box type being stacked
-  pallet_definition:  entt::entity   — the pallet type
-  stack_layers:       int            — user-configurable; solver derives stack pattern
+PalletizeComponent
+  pallet_arrival_port           entt::entity
+  pallet_tap_virtual_sensor     entt::entity      — gates the pallet belt while the station has a pallet to fill
+  current_pallet                entt::entity      — null until a pallet is at the arrival port
+  pattern                       PlacementPattern* — slot allocator
+  pallet_length_mm              int
+  pallet_width_mm               int
+  pallet_height_mm              int
+  pallet_max_stack_mm           int
 ```
 
-Staging position (where the pallet stops on the pallet belt during stacking) is **derived at runtime** from belt geometry — not stored in this component. For the first implementation: it is the intersection of the box belt's axis extended with the pallet belt's axis, projected onto the pallet belt segment. Parallel belts produce no intersection; that case is deferred.
+The station has a pallet iff `current_pallet != null` — no separate state enum is needed. The staging position (where the pallet stops on the pallet belt) is the world pose of `pallet_arrival_port`, which is parented to the pallet belt — moving the belt moves the staging position automatically. See [TRANSPORT_MODEL.md](TRANSPORT_MODEL.md) for dispatch and pallet release.
 
 ### TransportComponent
 
-Carried by every transport entity alongside a transport-type-specific component. Holds what all transports share.
+Carried by every transport entity (belts, pickers, future robots/AGVs) alongside a transport-flavour-specific component.
 
 ```
 TransportComponent
-  speed_mm_s:    float   — current transport speed
-  running:       bool    — true = moving, false = stopped/paused
-  capacity:      int     — max items in transit simultaneously (0 = unlimited)
+  running   bool   — controller intent; default true
 ```
+
+`running == true` is necessary but not sufficient for items to move — the actual motion gate is per-flavour: belts move iff `running && every gate port is clear`; pickers move under their own state-machine control. Capacity-as-item-count has been replaced by sensor-based gating; there is no `capacity` field. See [TRANSPORT_MODEL.md](TRANSPORT_MODEL.md).
 
 ### ConveyorBeltComponent
 
 ```
 ConveyorBeltComponent
-  catalog_ref              string         — "generic/flat-belt" | "mk/guf-p-2000"
-  width_mm                 int            — must be in catalog discrete list
-  length_mm                int            — within [catalog.min_length_mm, catalog.max_length_mm]
-  belt_surface_height_mm   int            — floor to belt top; leg height is derived
-  opening_clearance_mm     int = 50       — added each side for fence opening width
-  belt_speed_mm_s          float = 200    — for UV animation; 0 = stopped
-  direction_a_to_b         bool = true    — travel direction relative to PoseComponent orientation
+  catalog_ref              string                 — "generic/flat-belt" | "mk/guf-p-2000"
+  width_mm                 int                    — must be in catalog discrete list
+  length_mm                int                    — within [catalog.min_length_mm, catalog.max_length_mm]
+  surface_height_mm        int                    — floor to belt top; leg height is derived
+  opening_clearance_mm     int = 50               — added each side for fence opening width
+  belt_speed_mm_s          float = 200            — items advance at this rate when the belt is moving
+  dir                      Vec3                   — unit vector in scene-root frame
+  entry_port               entt::entity
+  exit_port                entt::entity
+  tap_ports                vector<entt::entity>   — ports along the belt's length; t derived from each port's pose
+  gate_ports               vector<entt::entity>   — subset whose blocked sensors freeze the belt; defaults to {exit_port}
 ```
 
-See [CONVEYOR_BELTS.md](CONVEYOR_BELTS.md) for catalog structure and procedural mesh generation.
+A belt is moving iff `running_() && every gate port is clear`. Tap-port positions are derived from each port's `PoseComponent` (parent-chained to the belt) — not stored explicitly. See [CONVEYOR_BELTS.md](CONVEYOR_BELTS.md) for catalog and mesh details, and [TRANSPORT_MODEL.md](TRANSPORT_MODEL.md) for the motion and gating model.
 
-### SpawnItemComponent *(future)*
+### SourceComponent
 
-Marks an entity as a source of items entering the scene. Carries item type and spawn rate. Always appears as `entry = null` in the flow graph.
+Marks an entity as a source of items entering the scene. Each tick, accumulates spawn debt at `rate_per_hour`; spawns when debt ≥ 1 and `out_port` is clear.
 
-### DespawnItemComponent *(future)*
+```
+SourceComponent
+  rate_per_hour   float
+  prototype       entt::entity   — ItemPrototype to instantiate
+  out_port        entt::entity   — port where new items are placed
+  spawn_debt      float          — accumulated fractional spawns
+```
 
-Marks an entity as a sink that removes items from the scene. Always appears as `exit = null` in the flow graph.
+### SinkComponent
+
+Marks an entity as a sink that removes items arriving at its `in_port`.
+
+```
+SinkComponent
+  in_port    entt::entity
+  received   int            — running count, monotonic
+```
+
+### SensorComponent
+
+A detection device. Returns a `blocked: bool` that gates ports.
+
+```
+SensorComponent
+  blocked   bool   — current reading; true = "do not flow into here"
+```
+
+Physical sensors (those that also carry `DetectionVolumeComponent`) are auto-updated by `SensorScanSystem` from item poses overlapping the volume. Virtual sensors (no `DetectionVolumeComponent`) have `blocked` written by orchestration code (typically `StationSystem`).
+
+### DetectionVolumeComponent
+
+Marks a sensor as physical. Presence of this component causes the scan system to update the sensor each tick.
+
+```
+DetectionVolumeComponent
+  length_mm   int   — extent along sensor-local +x
+  width_mm    int   — extent along sensor-local +y
+  height_mm   int   — extent along sensor-local +z
+```
+
+The sensor's `PoseComponent` is parented to the port it gates, so the volume inherits the port's parent-chain orientation (e.g. aligned with belt direction).
+
+### ItemOnTransportComponent
+
+Records that an item is currently riding a specific transport. The transport's tick code is responsible for advancing the item's pose.
+
+```
+ItemOnTransportComponent
+  transport   entt::entity   — belt or picker
+```
+
+The core rule: an item either has `ItemOnTransportComponent` **or** is parented to a container item that has it (transitively). Items at rest in the scene live inside containers — they are never floating in world space without a parent.
+
+### ItemPrototypeComponent
+
+Defines a class of items. Source entities reference a prototype to know what to spawn.
+
+```
+ItemPrototypeComponent
+  length_mm   int
+  width_mm    int
+  height_mm   int
+  color_hex   uint32
+```
+
+### SpawnedItemComponent
+
+Marks an entity as an instance of a prototype. Carries a reference back to its prototype.
+
+```
+SpawnedItemComponent
+  prototype   entt::entity
+```
+
+### PalletComponent
+
+Marks a `SpawnedItem` as a pallet — a container that may hold other items via parent-chain.
+
+```
+PalletComponent
+  length_mm            int
+  width_mm             int
+  height_mm            int
+  max_stack_height_mm  int
+  items                vector<entt::entity>   — children placed on this pallet
+```
+
+A child item placed on a pallet has its `PoseComponent.parent` set to the pallet entity; `world_transform()` traverses the chain. The child has no `ItemOnTransportComponent` while at rest in the pallet — the pallet itself is the thing on a transport.
 
 ### VisualComponent *(future)*
 
@@ -224,9 +324,9 @@ Holds the threepp `Object3D`, an asset key for catalog-driven geometry, and visi
 
 Owns hit geometry, gizmo configuration, and event callbacks. An entity without an `InteractiveComponent` cannot be selected or dragged. Callbacks mutate component data (NodeComponent, EdgeComponent, DeclaredOpeningComponent, etc.) and notify LayoutSolverSystem. They do not touch the solver directly.
 
-### SimulationComponent *(future)*
+### Simulation state
 
-Carries kinematics state for robots, motion state for conveyors, and pick/place task state. Additive — does not change existing component behaviour.
+There is no monolithic `SimulationComponent`. Simulation state is partitioned across the transport-flavour components: `TransportComponent::running_` is controller intent; `ConveyorBeltComponent::belt_speed_mm_s` and `dir` drive belt motion; `PickerTransportComponent::state` and the target fields drive picker motion; `SensorComponent::blocked` carries gate state. See [TRANSPORT_MODEL.md](TRANSPORT_MODEL.md).
 
 ---
 
@@ -256,9 +356,31 @@ Reads PoseComponent and VisualComponent for every entity that has both. Applies 
 
 Raycasts against hit geometry in InteractiveComponents. On hit, invokes the entity's callbacks. Callbacks mutate component data (e.g. updating `desired_position_mm` on a DeclaredOpeningComponent) and notify LayoutSolverSystem.
 
-### SimulationSystem *(future)*
+### SensorScanSystem *(future)*
 
-Steps the physics simulation and robot kinematics. Writes PoseComponents back from simulation state. Reads EdgeComponent and NodeComponent to know the fence boundary — not the raw SolverOutput.
+**Trigger:** each simulation tick, before TransportSystem.
+
+For every entity carrying `SensorComponent + DetectionVolumeComponent + PoseComponent`, transform every spawned item's world pose into sensor-local space and set `blocked = true` if any item centre falls within ±half-extents along all three axes. Virtual sensors (no `DetectionVolumeComponent`) are skipped.
+
+### TransportSystem *(future)*
+
+**Trigger:** each simulation tick, after SensorScanSystem.
+
+Owns all transport-flavour motion in one place. **Belts** advance items by `dir × belt_speed_mm_s × dt` iff `running_() && every gate port is clear`; detect tap-port crossings by comparing `prev_t` and `new_t`; hand items off at `exit_port` via `ItemOnTransportComponent::transport` reassignment when the destination port is clear. **Pickers** step toward the current target at `speed_mm_s`, transition state on arrival, and perform the matching transport/parent reassignment side-effects (see [TRANSPORT_MODEL.md](TRANSPORT_MODEL.md)).
+
+This is intentionally one system covering both belts and pickers — they are different motion math but the same conceptual role (transports moving items). The only sim work it does NOT cover is item creation / destruction.
+
+### StationSystem *(future)*
+
+**Trigger:** each simulation tick, after TransportSystem.
+
+Pure dispatch. For each station: claim a pallet if one is at the pallet arrival port and no current pallet is held; assign idle pickers to boxes waiting at the arrival port; maintain virtual sensor readings (`arrival_virtual_sensor` and any tap-port virtual sensors) from station state; release a full pallet by clearing the pallet-tap virtual sensor.
+
+### LifecycleSystem *(future)*
+
+**Trigger:** each simulation tick, after StationSystem.
+
+The only system that creates or destroys item entities. Sources accumulate debt and spawn when `port_is_clear(out_port)`; sinks consume items arriving at their `in_port`. Everything else is motion or orchestration.
 
 ---
 

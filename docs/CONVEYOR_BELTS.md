@@ -61,7 +61,7 @@ The full workflow system design is not yet settled and is not specified here. Wh
 - Belt entities and their fence openings will be **workflow solver output**, not direct user placement
 - For current demos, belts are placed manually in code
 
-The current entity model is designed so that the workflow solver can be added later without restructuring. The `FlowNodeComponent` on every belt entity is the hook point — the workflow solver will build the directed flow graph by setting `entry` and `exit` references.
+The current entity model is designed so that the workflow solver can be added later without restructuring. Each belt's `entry_port` and `exit_port` (PortComponent entities, parented to the belt) are the hook points — the workflow solver will build the directed flow graph by setting each port's `transport` field to the next transport in the chain. See [TRANSPORT_MODEL.md](TRANSPORT_MODEL.md) for the port and sensor model.
 
 ### Belt Placement Drives Fence Openings
 
@@ -77,22 +77,23 @@ opening.desired_position_mm  = intersection distance from node_a (mm)
 
 The fence layout solver treats these exactly like any other anchored opening. No new solver path is needed. A belt passing through the cell on both sides creates two such openings on two different edges from a single belt entity.
 
-The solver may group multiple belts into one opening when their combined widths plus clearances fit within a span. Individual belt connections are tracked via `FlowNodeComponent` references, not by separate openings.
+The solver may group multiple belts into one opening when their combined widths plus clearances fit within a span. Individual belt connections are tracked via the per-belt `entry_port` / `exit_port` references, not by separate openings.
 
 ### Item Flow Graph
 
-Belts connect to each other and to source/sink entities via `FlowNodeComponent`. The graph is a directed chain of `entt::entity` references:
+Belts connect to each other and to source / sink / station entities via **PortComponents on transports** (see [TRANSPORT_MODEL.md](TRANSPORT_MODEL.md)). The graph is a directed chain expressed in port references:
 
 ```
-SpawnItem  →  Belt1  →  Belt2  →  DespawnItem
+Source  →  Belt1  →  Belt2  →  Sink
 ```
 
-- `Belt1.FlowNode.entry` = SpawnItem entity
-- `Belt1.FlowNode.exit`  = Belt2 entity
-- `Belt2.FlowNode.entry` = Belt1 entity
-- `Belt2.FlowNode.exit`  = DespawnItem entity
+- `Source.out_port`     →  port whose `transport` = Belt1
+- `Belt1.entry_port`    ←  the same port (Source places items here)
+- `Belt1.exit_port`     →  port whose `transport` = Belt2 (handover)
+- `Belt2.entry_port`    ←  the same port
+- `Belt2.exit_port`     →  port whose `transport = null`; Sink consumes via its `in_port`
 
-Any entity carrying `FlowNodeComponent` can appear in the graph. Future station types (robot cells, buffers, machines) slot in without changing the model.
+A port is a first-class entity (Pose + Port + sensors). Tap ports along a belt's length appear in the belt's `tap_ports` list and are positioned along the belt by deriving `t` from each port's pose. Future station types (robot cells, buffers, machines) attach to ports just like sources and sinks — no schema change to the belt is needed.
 
 ---
 
@@ -103,14 +104,13 @@ Any entity carrying `FlowNodeComponent` can appear in the graph. Future station 
 ```
 ConveyorBeltEntity:
   PoseComponent              — center of belt (floor level), yaw = travel direction
-  ConveyorBeltComponent      — belt dimensions and catalog reference
-  FlowNodeComponent          — entry and exit in the item-flow graph
+  TransportComponent         — running flag (controller intent)
+  ConveyorBeltComponent      — belt dimensions, catalog ref, port references, gate ports
   VisualComponent  (future)  — owns threepp mesh, asset key from catalog
   InteractiveComponent (future)
-  SimulationComponent (future)
 ```
 
-See [ENTITY_SYSTEM.md](ENTITY_SYSTEM.md) for component field definitions.
+`ConveyorBeltComponent.entry_port`, `exit_port`, and `tap_ports[]` reference Port entities (Pose + Port + sensors), each parented to the belt. See [ENTITY_SYSTEM.md](ENTITY_SYSTEM.md) for component field definitions and [TRANSPORT_MODEL.md](TRANSPORT_MODEL.md) for the gating model.
 
 ### PoseComponent for Conveyors
 
@@ -343,14 +343,16 @@ Y = leg height * 0.0005  (centred vertically)
 
 ## Belt Animation
 
-UV offset scrolling. In the animate loop (or `SimulationSystem` once implemented):
+UV offset scrolling. In the animate loop (the render side mirrors the sim):
 
 ```cpp
 float scroll = (belt_speed_mm_s * delta_s) / tile_pitch_mm;
-belt_material->map->offset.x += direction_a_to_b ? scroll : -scroll;
+belt_material->map->offset.x += /* sign per dir */ scroll;
 ```
 
 `wrapS = Repeat` handles the periodicity — no modulo needed. The offset accumulates indefinitely without artefact.
+
+A belt visually scrolls iff it is **moving** in the simulation sense — `running_() && every gate port is clear`. Reading just `running_()` will scroll an idle belt whose downstream is blocked; render code must check the gate as well (or expose a helper that returns the moving predicate).
 
 ---
 
@@ -366,9 +368,10 @@ Deferred until workflow solver design is settled:
 Resolved:
 
 - Belt-generated openings use `DeclaredOpeningComponent` with `mobility = 0.0` and `type = Open`. No new type.
-- Multiple belts may share one opening; individual connections tracked via `FlowNodeComponent`.
-- Belt-to-belt handoff is modelled by sharing a `FlowNodeComponent` exit/entry reference. Sufficient for phase 1.
-- Workflow solver details are TBD; current demos wire the flow graph manually in code.
+- Multiple belts may share one fence opening; individual connections are tracked via per-belt `entry_port` / `exit_port` references.
+- Belt-to-belt handoff is modelled by setting the source belt's `exit_port.transport` to the destination belt's transport entity — items are reassigned to the destination via `ItemOnTransportComponent` when the destination port is clear.
+- Items always either ride a transport (have `ItemOnTransportComponent`) or are parented to a container item that does (e.g. boxes on a pallet). They never float in world space.
+- Workflow solver details are TBD; current demos wire ports and transports manually in code.
 
 ---
 
@@ -376,9 +379,9 @@ Resolved:
 
 1. Do not add workflow solver code until that design is settled. Current demos wire belts manually.
 2. Belt-generated fence openings are `DeclaredOpeningComponent` entities with `mobility = 0.0`, `type = Open`, and solver-assigned `desired_position_mm`. No new opening type.
-3. `ConveyorBeltComponent` holds intent (width, height, speed). Leg positions, opening widths, and mesh geometry are derived — never stored in the component.
+3. `ConveyorBeltComponent` holds intent (width, height, speed, direction) and references (`entry_port`, `exit_port`, `tap_ports`, `gate_ports`). Leg positions, opening widths, mesh geometry, and tap-port `t` along the belt are all **derived** — never stored in the component.
 4. Width must be validated against the catalog discrete list at entity creation.
 5. The mesh generator is a pure function with no ECS access.
-6. Belt animation belongs in the animate loop (now) and `SimulationSystem` (future). Not in the mesh generator.
+6. Belt animation belongs in the animate loop, mirroring the sim's belt-moving predicate (`running_() && every gate port is clear`). Not in the mesh generator. Belt motion itself lives in `TransportSystem` (see [TRANSPORT_MODEL.md](TRANSPORT_MODEL.md)).
 7. When `mesh_source = "obj"` but files are absent, fall back to procedural and log a warning. Never fail silently or crash.
 8. The mk catalog entry must not be used for rendering until its OBJ files are present. Code that reads `catalog_ref = "mk/guf-p-2000"` must check `obj.STATUS` or test file existence before attempting to load.

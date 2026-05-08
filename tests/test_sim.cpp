@@ -1268,11 +1268,7 @@ TEST(palletizer_integration_runs_for_90_seconds) {
     scene.connect_belt(pallet_belt, pal_entry, pal_exit);
     scene.set_port_transport(pal_entry, pallet_belt);
 
-    auto pal_tap_gate   = scene.add_tap_port(pallet_belt, "pal_tap_gate", 3000);
-    scene.make_gate_port(pallet_belt, pal_tap_gate);
-    auto pal_tap_virt   = scene.add_virtual_sensor(pal_tap_gate);
-    auto pal_tap_detect = scene.add_tap_port(pallet_belt, "pal_tap_detect", 3000);
-    scene.add_laser_sensor(pal_tap_detect);
+    auto pal_tap = scene.add_claim_station_taps(pallet_belt, 3000, "pal_tap");
 
     scene.add_laser_sensor(pal_entry);    // spawn throttle (item body decides spacing)
     scene.add_laser_sensor(pal_exit);     // sink detection
@@ -1309,8 +1305,8 @@ TEST(palletizer_integration_runs_for_90_seconds) {
     sc.add_picker(picker);
 
     auto& palc = reg.emplace<factory::PalletizeComponent>(station_e);
-    palc.set_pallet_arrival_port(pal_tap_detect);
-    palc.set_pallet_tap_virtual_sensor(pal_tap_virt);
+    palc.set_pallet_arrival_port(pal_tap.detect_port);
+    palc.set_pallet_tap_virtual_sensor(pal_tap.virtual_sensor);
     palc.set_pattern(std::make_shared<factory::GridPattern>());
     palc.set_pallet_dimensions(1200, 800, 145, 1500);
 

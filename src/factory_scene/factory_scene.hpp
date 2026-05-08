@@ -308,6 +308,39 @@ public:
         registry_.get<ConveyorBeltComponent>(belt).add_gate_port(port);
     }
 
+    // For "claim-and-fill" stations (palletizer, drill, anything where the
+    // workpiece stays put and is later released back into flow), the gating
+    // and detection roles need separate ports at the same belt position:
+    //
+    //   - The gate port carries the station-driven virtual sensor that
+    //     halts the belt while the station has work to do. It is in the
+    //     belt's gate_ports.
+    //   - The detect port carries a laser the station polls to find the
+    //     newly arrived workpiece. It is NOT in gate_ports — otherwise
+    //     after the station releases the workpiece the laser would still
+    //     be tripped by the workpiece's body sitting at the tap, and the
+    //     belt could never move it forward.
+    //
+    // Returns both, plus the virtual sensor handle the station writes to.
+    struct ClaimStationTaps {
+        entt::entity detect_port;
+        entt::entity gate_port;
+        entt::entity virtual_sensor;
+    };
+    ClaimStationTaps add_claim_station_taps(entt::entity       belt,
+                                            int                position_mm,
+                                            const std::string& name_prefix = "tap")
+    {
+        ClaimStationTaps out;
+        out.gate_port      = add_tap_port(belt, name_prefix + "_gate",   position_mm);
+        make_gate_port(belt, out.gate_port);
+        out.virtual_sensor = add_virtual_sensor(out.gate_port);
+
+        out.detect_port    = add_tap_port(belt, name_prefix + "_detect", position_mm);
+        add_laser_sensor(out.detect_port);
+        return out;
+    }
+
     // ── Items ────────────────────────────────────────────────────────────────
 
     entt::entity add_prototype(int length_mm, int width_mm, int height_mm, uint32_t color_hex) {

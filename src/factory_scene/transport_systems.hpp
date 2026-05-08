@@ -70,6 +70,60 @@ inline Quat rotation(float t, float seed) {
 
 }  // namespace magic
 
+namespace detail {
+
+// Side-effect: pick up a box onto a carrier (picker, magic transport, future
+// robot arm — anything that can carry an item). Reassigns the box's
+// ItemOnTransport to the carrier and reparents the box so it tracks the
+// carrier's pose. The box and carrier should already be coincident in world
+// space when this runs (their world poses match) so there's no visible jump.
+inline void grab_box(entt::registry& reg, entt::entity carrier, entt::entity box) {
+    if (box == entt::null) return;
+    reg.get_or_emplace<ItemOnTransportComponent>(box).set_transport(carrier);
+    auto& bpose = reg.get<PoseComponent>(box);
+    bpose.position = Vec3{0.f};
+    bpose.parent   = carrier;
+}
+
+// Side-effect: release a box at `drop_target_world`, parenting it into
+// `container` (or scene root if null). The local position is computed from
+// the world target so the visible position is continuous on re-parent. Adds
+// the box to the container's PalletComponent items if applicable.
+inline void drop_box(FactoryScene& scene, entt::entity box,
+                     entt::entity container,
+                     Vec3         drop_target_world,
+                     Quat         drop_orientation)
+{
+    if (box == entt::null) return;
+    auto& reg = scene.registry();
+    if (reg.any_of<ItemOnTransportComponent>(box))
+        reg.remove<ItemOnTransportComponent>(box);
+
+    auto& bpose = reg.get<PoseComponent>(box);
+    if (container != entt::null) {
+        glm::mat4 cw    = world_transform(container, reg);
+        glm::mat4 ci    = glm::inverse(cw);
+        Vec3      local = Vec3(ci * glm::vec4(drop_target_world, 1.f));
+        bpose.position    = local;
+        bpose.orientation = drop_orientation;
+        bpose.parent      = container;
+        if (auto* palletc = reg.try_get<PalletComponent>(container))
+            palletc->add_item(box);
+    } else {
+        bpose.parent = scene.root_entity();
+    }
+}
+
+// Side-effect: reset a magic transport's per-leg bookkeeping for its next
+// leg. Origin = where we are now (world); elapsed = 0; state = next.
+inline void begin_magic_leg(MagicTransportComponent& mt, PickerState next, Vec3 origin) {
+    mt.set_state(next);
+    mt.set_leg_origin(origin);
+    mt.set_elapsed_s(0.f);
+}
+
+}  // namespace detail
+
 // A belt is "moving" iff its controller is on AND every gate port is clear.
 inline bool belt_is_moving(const entt::registry& reg, entt::entity belt_e) {
     const auto* tc = reg.try_get<TransportComponent>(belt_e);
@@ -213,49 +267,19 @@ inline void step(FactoryScene& scene, float dt) {
         ppose.position = target;
 
         switch (pt.state()) {
-            case PickerState::MovingToBox: {
-                auto box = pt.current_box();
-                if (box != entt::null) {
-                    reg.get_or_emplace<ItemOnTransportComponent>(box)
-                       .set_transport(picker_e);
-                    auto& bpose = reg.get<PoseComponent>(box);
-                    bpose.position = Vec3{0.f};   // ride the picker at zero local
-                    bpose.parent   = picker_e;
-                }
+            case PickerState::MovingToBox:
+                detail::grab_box(reg, picker_e, pt.current_box());
                 pt.set_state(PickerState::Carrying);
                 break;
-            }
-            case PickerState::Carrying: {
-                auto box       = pt.current_box();
-                auto container = pt.drop_container();
-                if (box != entt::null) {
-                    if (reg.any_of<ItemOnTransportComponent>(box))
-                        reg.remove<ItemOnTransportComponent>(box);
-
-                    auto& bpose = reg.get<PoseComponent>(box);
-                    if (container != entt::null) {
-                        // Convert drop_target (world) into container-local frame
-                        // so the box doesn't snap visually on re-parent.
-                        glm::mat4 cw    = world_transform(container, reg);
-                        glm::mat4 ci    = glm::inverse(cw);
-                        Vec3      local = Vec3(ci * glm::vec4(pt.drop_target(), 1.f));
-                        bpose.position    = local;
-                        bpose.orientation = pt.drop_orientation();
-                        bpose.parent      = container;
-                        if (auto* palletc = reg.try_get<PalletComponent>(container))
-                            palletc->add_item(box);
-                    } else {
-                        bpose.parent = scene.root_entity();
-                    }
-                }
+            case PickerState::Carrying:
+                detail::drop_box(scene, pt.current_box(), pt.drop_container(),
+                                 pt.drop_target(), pt.drop_orientation());
                 pt.set_state(PickerState::Returning);
                 break;
-            }
-            case PickerState::Returning: {
+            case PickerState::Returning:
                 pt.set_state(PickerState::Idle);
                 pt.set_current_box(entt::null);
                 break;
-            }
             default: break;
         }
     }
@@ -293,53 +317,19 @@ inline void step(FactoryScene& scene, float dt) {
         mpose.orientation = Quat{1.f, 0.f, 0.f, 0.f};
 
         switch (mt.state()) {
-            case PickerState::MovingToBox: {
-                auto box = mt.current_box();
-                if (box != entt::null) {
-                    reg.get_or_emplace<ItemOnTransportComponent>(box)
-                       .set_transport(magic_e);
-                    auto& bpose = reg.get<PoseComponent>(box);
-                    bpose.position = Vec3{0.f};
-                    bpose.parent   = magic_e;
-                }
-                mt.set_state(PickerState::Carrying);
-                mt.set_leg_origin(target);
-                mt.set_elapsed_s(0.f);
+            case PickerState::MovingToBox:
+                detail::grab_box(reg, magic_e, mt.current_box());
+                detail::begin_magic_leg(mt, PickerState::Carrying, target);
                 break;
-            }
-            case PickerState::Carrying: {
-                auto box       = mt.current_box();
-                auto container = mt.drop_container();
-                if (box != entt::null) {
-                    if (reg.any_of<ItemOnTransportComponent>(box))
-                        reg.remove<ItemOnTransportComponent>(box);
-
-                    auto& bpose = reg.get<PoseComponent>(box);
-                    if (container != entt::null) {
-                        glm::mat4 cw    = world_transform(container, reg);
-                        glm::mat4 ci    = glm::inverse(cw);
-                        Vec3      local = Vec3(ci * glm::vec4(mt.drop_target(), 1.f));
-                        bpose.position    = local;
-                        bpose.orientation = mt.drop_orientation();
-                        bpose.parent      = container;
-                        if (auto* palletc = reg.try_get<PalletComponent>(container))
-                            palletc->add_item(box);
-                    } else {
-                        bpose.parent = scene.root_entity();
-                    }
-                }
-                mt.set_state(PickerState::Returning);
-                mt.set_leg_origin(target);
-                mt.set_elapsed_s(0.f);
+            case PickerState::Carrying:
+                detail::drop_box(scene, mt.current_box(), mt.drop_container(),
+                                 mt.drop_target(), mt.drop_orientation());
+                detail::begin_magic_leg(mt, PickerState::Returning, target);
                 break;
-            }
-            case PickerState::Returning: {
-                mt.set_state(PickerState::Idle);
+            case PickerState::Returning:
+                detail::begin_magic_leg(mt, PickerState::Idle, mt.home_pose());
                 mt.set_current_box(entt::null);
-                mt.set_leg_origin(mt.home_pose());
-                mt.set_elapsed_s(0.f);
                 break;
-            }
             default: break;
         }
     }

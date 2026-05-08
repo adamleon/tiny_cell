@@ -149,20 +149,12 @@ int main() {
     scene.connect_belt(pallet_belt, pal_entry, pal_exit);
     scene.set_port_transport(pal_entry, pallet_belt);
 
-    // Two ports at the tap location: one gates the belt (virtual sensor only),
-    // the other detects the pallet (physical sensor only). Splitting them lets
-    // the station release the pallet without the physical sensor locking up
-    // the belt — once virtual clears, the belt resumes and the pallet moves
-    // out of the detection volume on its own.
-    auto pal_tap_gate   = scene.add_tap_port(pallet_belt, "pal_tap_gate",   3000);
-    scene.make_gate_port(pallet_belt, pal_tap_gate);
-    auto pal_tap_virt   = scene.add_virtual_sensor(pal_tap_gate);
-
-    // Laser at the tap — pallet stops with its leading edge on the line.
-    // The pallet's body itself is what crosses the laser; the sensor has
-    // no extents.
-    auto pal_tap_detect = scene.add_tap_port(pallet_belt, "pal_tap_detect", 3000);
-    scene.add_laser_sensor(pal_tap_detect);
+    // Claim-and-fill tap: separate gate / detect ports at the same belt
+    // position. The pallet's body trips the detect laser as soon as it
+    // arrives; the station then writes its virtual sensor on the gate
+    // port to halt the belt while it fills the pallet, and clears it on
+    // release so the belt carries the full pallet onward.
+    auto pal_tap = scene.add_claim_station_taps(pallet_belt, 3000, "pal_tap");
 
     // Spawn-throttle laser at the entry — gap between consecutive pallets
     // emerges from the pallet's own body length, no sensor sizing needed.
@@ -207,8 +199,8 @@ int main() {
     sc.add_picker(agent);
 
     auto& palc = reg.emplace<factory::PalletizeComponent>(station_e);
-    palc.set_pallet_arrival_port(pal_tap_detect);    // station polls the detection port
-    palc.set_pallet_tap_virtual_sensor(pal_tap_virt); // station drives the gate port
+    palc.set_pallet_arrival_port(pal_tap.detect_port);
+    palc.set_pallet_tap_virtual_sensor(pal_tap.virtual_sensor);
     palc.set_pattern(std::make_shared<factory::GridPattern>());
     palc.set_pallet_dimensions(1200, 800, 145, 1500);
 

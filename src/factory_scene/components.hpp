@@ -84,25 +84,14 @@ private:
     bool blocked_ = false;
 };
 
-// Presence of this component marks a sensor as physical. The volume is in
-// the sensor entity's local frame; orientation comes from PoseComponent's
-// parent chain (typically the parent port's forward direction).
-struct DetectionVolumeComponent {
-    int length_mm() const { return length_mm_; }
-    int width_mm()  const { return width_mm_; }
-    int height_mm() const { return height_mm_; }
-
-    void set_dimensions(int L, int W, int H) {
-        length_mm_ = detail::positive(L);
-        width_mm_  = detail::positive(W);
-        height_mm_ = detail::positive(H);
-    }
-
-private:
-    int length_mm_ = 100;
-    int width_mm_  = 100;
-    int height_mm_ = 100;
-};
+// Marker component: presence on a sensor entity makes it a "laser" sensor —
+// a 1D detection line at the sensor's world position, perpendicular to the
+// sensor's local +x axis (which is the belt direction when the sensor is
+// parented to a port). An item triggers the laser iff its bounding box
+// crosses the line in the belt-direction axis. The sensor itself carries no
+// dimensions; the item's collision box (its ItemPrototypeComponent) decides
+// what counts as "crossing".
+struct LaserSensorComponent {};
 
 // ── Transport / workflow ──────────────────────────────────────────────────────
 

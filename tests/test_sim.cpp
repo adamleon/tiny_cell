@@ -112,14 +112,6 @@ TEST(sensor_set_blocked_round_trip) {
     REQUIRE(!s.blocked());
 }
 
-TEST(detection_volume_set_dimensions) {
-    factory::DetectionVolumeComponent dv;
-    dv.set_dimensions(300, 200, 100);
-    REQUIRE_EQ(dv.length_mm(), 300);
-    REQUIRE_EQ(dv.width_mm(),  200);
-    REQUIRE_EQ(dv.height_mm(), 100);
-}
-
 TEST(port_no_sensors_default) {
     factory::PortComponent pc;
     REQUIRE(pc.sensors().empty());
@@ -271,17 +263,19 @@ TEST(shared_sensor_gates_multiple_ports) {
 TEST(sensor_scan_no_items_keeps_clear) {
     factory::FactoryScene scene;
     auto port_e = scene.add_port("p", {0.f, 0.f, 0.f});
-    auto s_e    = scene.add_physical_sensor(port_e, 200, 200, 200, {0.f, 0.f, 0.f});
+    auto s_e    = scene.add_laser_sensor(port_e);
 
     factory::sensor::scan(scene);
 
     REQUIRE(!scene.registry().get<factory::SensorComponent>(s_e).blocked());
 }
 
-TEST(sensor_scan_item_in_volume_blocks) {
+TEST(sensor_scan_point_item_at_laser_blocks) {
+    // An item without a prototype has zero extent: it triggers the laser
+    // only when its centre exactly coincides with the laser's position.
     factory::FactoryScene scene;
     auto port_e = scene.add_port("p", {0.f, 0.f, 0.f});
-    auto s_e    = scene.add_physical_sensor(port_e, 200, 200, 200, {0.f, 0.f, 0.f});
+    auto s_e    = scene.add_laser_sensor(port_e);
 
     auto& reg  = scene.registry();
     auto  item = reg.create();
@@ -295,15 +289,15 @@ TEST(sensor_scan_item_in_volume_blocks) {
     REQUIRE(reg.get<factory::SensorComponent>(s_e).blocked());
 }
 
-TEST(sensor_scan_item_outside_volume_clear) {
+TEST(sensor_scan_point_item_far_from_laser_clear) {
     factory::FactoryScene scene;
     auto port_e = scene.add_port("p", {0.f, 0.f, 0.f});
-    auto s_e    = scene.add_physical_sensor(port_e, 200, 200, 200, {0.f, 0.f, 0.f});
+    auto s_e    = scene.add_laser_sensor(port_e);
 
     auto& reg  = scene.registry();
     auto  item = reg.create();
     auto& pose = reg.emplace<factory::PoseComponent>(item);
-    pose.position = {500.f, 0.f, 0.f};   // far outside ±100 mm in x
+    pose.position = {500.f, 0.f, 0.f};
     pose.parent   = scene.root_entity();
     reg.emplace<factory::SpawnedItemComponent>(item);
 
@@ -327,23 +321,40 @@ TEST(virtual_sensor_unaffected_by_scan) {
 
     factory::sensor::scan(scene);
 
-    // Should remain blocked — scan only writes to physical sensors.
+    // Should remain blocked — scan only writes to laser sensors.
     REQUIRE(reg.get<factory::SensorComponent>(s_e).blocked());
 }
 
-TEST(sensor_scan_centre_not_aabb) {
-    // Detection is centre-point: an item whose centre is OUTSIDE the volume
-    // does NOT block, even if its body would overlap. The sensor is a
-    // trigger-point model, not a physical AABB.
+TEST(sensor_scan_triggers_when_body_crosses_laser) {
+    // An item whose body crosses the laser line — even with its centre
+    // already past the line — keeps the laser triggered. The sensor has
+    // no extents; the item's bounding box decides.
     factory::FactoryScene scene;
     auto port_e = scene.add_port("p", {0.f, 0.f, 0.f});
-    auto s_e    = scene.add_physical_sensor(port_e, 200, 200, 200, {0.f, 0.f, 0.f});
+    auto s_e    = scene.add_laser_sensor(port_e);
 
     auto& reg  = scene.registry();
-    auto proto = scene.add_prototype(400, 400, 400, 0u);   // big body, far past sensor
+    auto proto = scene.add_prototype(400, 400, 400, 0u);
     auto item  = reg.create();
     auto& pose = reg.emplace<factory::PoseComponent>(item);
-    pose.position = {150.f, 0.f, 0.f};                     // centre 50 mm past sensor edge
+    pose.position = {150.f, 0.f, 0.f};   // body in x: [-50, 350], crosses 0
+    pose.parent   = scene.root_entity();
+    reg.emplace<factory::SpawnedItemComponent>(item).set_prototype(proto);
+
+    factory::sensor::scan(scene);
+    REQUIRE(reg.get<factory::SensorComponent>(s_e).blocked());
+}
+
+TEST(sensor_scan_clear_when_body_past_laser) {
+    factory::FactoryScene scene;
+    auto port_e = scene.add_port("p", {0.f, 0.f, 0.f});
+    auto s_e    = scene.add_laser_sensor(port_e);
+
+    auto& reg  = scene.registry();
+    auto proto = scene.add_prototype(400, 400, 400, 0u);
+    auto item  = reg.create();
+    auto& pose = reg.emplace<factory::PoseComponent>(item);
+    pose.position = {300.f, 0.f, 0.f};   // body in x: [100, 500] — laser at 0
     pose.parent   = scene.root_entity();
     reg.emplace<factory::SpawnedItemComponent>(item).set_prototype(proto);
 
@@ -352,16 +363,14 @@ TEST(sensor_scan_centre_not_aabb) {
 }
 
 TEST(sensor_scan_uses_offset) {
-    // Sensor's local offset moves its volume centre; verify an item at the
-    // offset position is detected and an item at the port origin is not.
     factory::FactoryScene scene;
     auto port_e = scene.add_port("p", {0.f, 0.f, 0.f});
-    auto s_e    = scene.add_physical_sensor(port_e, 100, 100, 100, {500.f, 0.f, 0.f});
+    auto s_e    = scene.add_laser_sensor(port_e, {500.f, 0.f, 0.f});
 
     auto& reg  = scene.registry();
     auto  item = reg.create();
     auto& pose = reg.emplace<factory::PoseComponent>(item);
-    pose.position = {500.f, 0.f, 0.f};   // at sensor centre
+    pose.position = {500.f, 0.f, 0.f};   // exactly at laser position
     pose.parent   = scene.root_entity();
     reg.emplace<factory::SpawnedItemComponent>(item);
 
@@ -703,6 +712,21 @@ TEST(no_spawn_when_debt_below_one) {
     REQUIRE(events.spawned.empty());
 }
 
+TEST(source_shifts_spawn_for_leading_edge_at_port) {
+    // A spawned item is placed with its leading edge at the port, not its
+    // centre — i.e. its centre is shifted back along the belt direction by
+    // half its motion-axis extent. Without this shift, the freshly spawned
+    // item would clip into the previous one (whose trailing edge has only
+    // just cleared the source's laser).
+    auto  scene  = make_source_belt_scene();          // 300×300×300 proto, +x belt
+    auto& reg    = scene.registry();
+    auto  events = factory::lifecycle::step(scene, 1.0f);
+    REQUIRE(!events.spawned.empty());
+    auto item = events.spawned[0].entity;
+    // Port at (0, 0, 0), belt direction +x. half_length = 150 mm.
+    REQUIRE_NEAR(reg.get<factory::PoseComponent>(item).position.x, -150.f, 1e-3f);
+}
+
 TEST(source_caps_at_one_spawn_per_tick) {
     // Even when accumulated debt is > 1 (from a long dt or a long
     // belt-frozen interval), a source spawns at most one item per tick.
@@ -720,8 +744,8 @@ TEST(sink_despawns_item_at_in_port) {
     auto exit_e  = scene.add_port("exit",  {1000.f, 0.f, 0.f}, {1.f, 0.f, 0.f});
     scene.connect_belt(belt_e, entry_e, exit_e);
     scene.add_sink(exit_e);
-    // Sink must be able to detect arriving items via a sensor on its in_port.
-    scene.add_physical_sensor(exit_e, 200, 200, 200, {0.f, 0.f, 0.f});
+    // Sink must be able to detect arriving items via a laser on its in_port.
+    scene.add_laser_sensor(exit_e);
 
     auto& reg = scene.registry();
     auto  proto = scene.add_prototype(300, 300, 300, 0xFF0000u);
@@ -991,11 +1015,15 @@ static PalletizerFixture make_palletizer_fixture() {
     auto& reg   = scene.registry();
 
     pf.pallet_arrival_port = scene.add_port("pal_arr", {0.f, 0.f, 0.f});
-    scene.add_physical_sensor(pf.pallet_arrival_port, 200, 900, 200);
+    scene.add_laser_sensor(pf.pallet_arrival_port);
     pf.pallet_tap_virt = scene.add_virtual_sensor(pf.pallet_arrival_port);
 
-    pf.box_arrival_port  = scene.add_port("box_arr", {500.f, 0.f, 0.f});
-    scene.add_physical_sensor(pf.box_arrival_port, 300, 300, 250);
+    // Box arrival port is at belt height, separate from the pallet port's
+    // ground plane — otherwise a 1200 × 800 × 145 pallet's bounding box
+    // would also enclose the box port's laser and trigger spurious
+    // dispatches. (This mirrors the demo's geometry.)
+    pf.box_arrival_port  = scene.add_port("box_arr", {500.f, 0.f, 800.f});
+    scene.add_laser_sensor(pf.box_arrival_port);
     pf.box_arrival_virt  = scene.add_virtual_sensor(pf.box_arrival_port);
 
     pf.box_proto    = scene.add_prototype(250, 250, 200, 0u);
@@ -1244,10 +1272,10 @@ TEST(palletizer_integration_runs_for_90_seconds) {
     scene.make_gate_port(pallet_belt, pal_tap_gate);
     auto pal_tap_virt   = scene.add_virtual_sensor(pal_tap_gate);
     auto pal_tap_detect = scene.add_tap_port(pallet_belt, "pal_tap_detect", 3000);
-    scene.add_physical_sensor(pal_tap_detect, 200, 900, 200);
+    scene.add_laser_sensor(pal_tap_detect);
 
-    scene.add_physical_sensor(pal_entry, 2600, 900, 200);  // spawn throttle
-    scene.add_physical_sensor(pal_exit,  200, 900, 200);   // sink detection
+    scene.add_laser_sensor(pal_entry);    // spawn throttle (item body decides spacing)
+    scene.add_laser_sensor(pal_exit);     // sink detection
 
     // Box belt — 2800 mm at height 800.
     auto box_belt  = scene.add_belt(300, 2800, 800, 1000.f, {1.f, 0.f, 0.f});
@@ -1256,8 +1284,8 @@ TEST(palletizer_integration_runs_for_90_seconds) {
     scene.connect_belt(box_belt, box_entry, box_exit);
     scene.set_port_transport(box_entry, box_belt);
 
-    scene.add_physical_sensor(box_entry, 700, 300, 250);
-    scene.add_physical_sensor(box_exit,  300, 300, 250);
+    scene.add_laser_sensor(box_entry);
+    scene.add_laser_sensor(box_exit);
     auto box_exit_virt = scene.add_virtual_sensor(box_exit);
 
     // Prototypes & sources.
@@ -1371,7 +1399,6 @@ int main() {
     RUN(transport_set_running_round_trip);
     RUN(sensor_default_not_blocked);
     RUN(sensor_set_blocked_round_trip);
-    RUN(detection_volume_set_dimensions);
     RUN(port_no_sensors_default);
     RUN(port_add_sensor_appends);
     RUN(picker_default_state_idle);
@@ -1396,10 +1423,11 @@ int main() {
 
     // sensor::scan
     RUN(sensor_scan_no_items_keeps_clear);
-    RUN(sensor_scan_item_in_volume_blocks);
-    RUN(sensor_scan_item_outside_volume_clear);
+    RUN(sensor_scan_point_item_at_laser_blocks);
+    RUN(sensor_scan_point_item_far_from_laser_clear);
     RUN(virtual_sensor_unaffected_by_scan);
-    RUN(sensor_scan_centre_not_aabb);
+    RUN(sensor_scan_triggers_when_body_crosses_laser);
+    RUN(sensor_scan_clear_when_body_past_laser);
     RUN(sensor_scan_uses_offset);
 
     // transport::step (belt)
@@ -1423,6 +1451,7 @@ int main() {
     RUN(source_does_not_spawn_when_port_blocked);
     RUN(spawned_item_has_correct_prototype);
     RUN(no_spawn_when_debt_below_one);
+    RUN(source_shifts_spawn_for_leading_edge_at_port);
     RUN(source_caps_at_one_spawn_per_tick);
     RUN(sink_despawns_item_at_in_port);
 

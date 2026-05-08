@@ -158,19 +158,18 @@ int main() {
     scene.make_gate_port(pallet_belt, pal_tap_gate);
     auto pal_tap_virt   = scene.add_virtual_sensor(pal_tap_gate);
 
-    // Stop-here sensor: small + centred on the tap so the pallet's centre
-    // comes to rest near the tap location.
+    // Laser at the tap — pallet stops with its leading edge on the line.
+    // The pallet's body itself is what crosses the laser; the sensor has
+    // no extents.
     auto pal_tap_detect = scene.add_tap_port(pallet_belt, "pal_tap_detect", 3000);
-    scene.add_physical_sensor(pal_tap_detect, 200, 900, 200);
+    scene.add_laser_sensor(pal_tap_detect);
 
-    // Spawn-throttle sensor at the entry: with centre-point detection the
-    // sensor must encompass roughly 2 × item_length so the previous pallet's
-    // centre clears before the next one is spawned. 2600 mm = 2 × 1200 (pallet
-    // length) + 200 mm gap.
-    scene.add_physical_sensor(pal_entry, 2600, 900, 200);
+    // Spawn-throttle laser at the entry — gap between consecutive pallets
+    // emerges from the pallet's own body length, no sensor sizing needed.
+    scene.add_laser_sensor(pal_entry);
 
-    // Sink detection — a small footprint at the exit port suffices.
-    scene.add_physical_sensor(pal_exit,  200, 900, 200);
+    // Sink-side laser — pallet trips this when it arrives.
+    scene.add_laser_sensor(pal_exit);
 
     // Box belt: 2800 mm, +x at height 800.
     auto box_belt  = scene.add_belt(300, 2800, 800, 200.f, {1.f, 0.f, 0.f});
@@ -179,10 +178,9 @@ int main() {
     scene.connect_belt(box_belt, box_entry, box_exit);
     scene.set_port_transport(box_entry, box_belt);
 
-    // Box spawn throttle: 2 × box_length (250) + 200 mm gap = 700 mm.
-    scene.add_physical_sensor(box_entry, 700, 300, 250);
-    // Box exit (stop-here / station detection): tight around the port.
-    scene.add_physical_sensor(box_exit,  300, 300, 250);
+    // Box spawn throttle and stop-here lasers (no sensor sizing required).
+    scene.add_laser_sensor(box_entry);
+    scene.add_laser_sensor(box_exit);
     auto box_exit_virt = scene.add_virtual_sensor(box_exit);   // station-driven
 
     // Prototypes.

@@ -222,15 +222,17 @@ public:
 
     // ── Sensors ───────────────────────────────────────────────────────────────
 
-    // Physical sensor: parented to `port` with `local_offset` and a detection
-    // volume. The scan system updates `blocked` from item poses each tick.
-    entt::entity add_physical_sensor(entt::entity port,
-                                     int length_mm, int width_mm, int height_mm,
-                                     Vec3 local_offset = Vec3{0.f}) {
+    // Laser sensor: a 1D detection line at the sensor's world position,
+    // parented to `port` so its orientation tracks the port's forward
+    // direction. The sensor itself carries no extents — the item's bounding
+    // box (from ItemPrototypeComponent) decides whether it crosses the
+    // line. `local_offset` shifts the laser along the port's local axes
+    // (typically `{x, 0, 0}` to move it forward / back along the belt).
+    entt::entity add_laser_sensor(entt::entity port,
+                                  Vec3         local_offset = Vec3{0.f}) {
         auto e = registry_.create();
         registry_.emplace<SensorComponent>(e);
-        registry_.emplace<DetectionVolumeComponent>(e)
-                 .set_dimensions(length_mm, width_mm, height_mm);
+        registry_.emplace<LaserSensorComponent>(e);
         auto& pose = registry_.emplace<PoseComponent>(e);
         pose.position = local_offset;
         pose.parent   = port;

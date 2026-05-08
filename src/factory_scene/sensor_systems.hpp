@@ -8,50 +8,68 @@
 
 namespace factory::sensor {
 
-// Test whether `item_e`'s world centre lies inside `sensor_e`'s detection
-// volume. The volume is axis-aligned in the sensor's local frame; the item
-// centre is transformed into that frame by the inverse of the sensor's
-// parent-chain world transform. This is a "trigger point" model: the sensor
-// fires when the item's centroid passes through the sensor's bounds.
+// Test whether `item_e`'s bounding box contains `sensor_e`'s world position.
+// The sensor is a real point in 3D — a laser at a specific (x, y, z) — and
+// the item's collision box (from ItemPrototypeComponent) decides whether it
+// is currently on that point. If the item has no prototype it is treated
+// as a point and only triggers when its centre coincides exactly with the
+// sensor.
 //
-// For occupancy/spawn-throttling use cases the sensor must be sized large
-// enough to encompass the area of interest (typically `2 * item_length +
-// 2 * gap` for a spawn port). For "stop-here" use cases the sensor should be
-// small and centred on the desired stop position; the item then comes to
-// rest with its centre inside the sensor (offset at most by half of the
-// sensor's length on the entry axis, plus one tick of belt motion).
-inline bool item_in_volume(const entt::registry& reg,
-                           entt::entity         item_e,
-                           entt::entity         sensor_e)
+// Same check serves both "stop here" sensors (the item halts when its
+// leading edge first encloses the laser point) and "occupancy" sensors
+// (the laser stays triggered while any part of the body covers the point).
+// Sensors at different heights or cross-belt offsets do not interfere with
+// each other because the test is point-in-box on all three axes.
+inline bool item_at_laser(const entt::registry& reg,
+                          entt::entity         item_e,
+                          entt::entity         sensor_e)
 {
-    const auto* dv = reg.try_get<DetectionVolumeComponent>(sensor_e);
-    if (!dv) return false;
+    if (!reg.any_of<LaserSensorComponent>(sensor_e)) return false;
 
-    const glm::mat4 sw  = world_transform(sensor_e, reg);
-    const glm::mat4 inv = glm::inverse(sw);
-    const glm::mat4 iw  = world_transform(item_e, reg);
+    const glm::mat4 sw   = world_transform(sensor_e, reg);
+    const glm::vec3 spos = glm::vec3(sw[3]);
 
-    const glm::vec3 ilocal = glm::vec3(inv * glm::vec4(glm::vec3(iw[3]), 1.f));
+    const glm::mat4 iw   = world_transform(item_e, reg);
+    const glm::vec3 ipos = glm::vec3(iw[3]);
 
-    return std::abs(ilocal.x) <= dv->length_mm() * 0.5f
-        && std::abs(ilocal.y) <= dv->width_mm()  * 0.5f
-        && std::abs(ilocal.z) <= dv->height_mm() * 0.5f;
+    float ihl = 0.f, ihw = 0.f, ihh = 0.f;
+    if (const auto* sp = reg.try_get<SpawnedItemComponent>(item_e)) {
+        if (const auto* proto = reg.try_get<ItemPrototypeComponent>(sp->prototype())) {
+            ihl = proto->length_mm() * 0.5f;
+            ihw = proto->width_mm()  * 0.5f;
+            ihh = proto->height_mm() * 0.5f;
+        }
+    }
+
+    // Project (sensor − item.centre) onto each item-local axis. The laser
+    // is inside the item's OBB iff every projection magnitude is within
+    // that axis's half-extent.
+    const glm::vec3 d  = spos - ipos;
+    const glm::vec3 ix = glm::vec3(iw[0]);
+    const glm::vec3 iy = glm::vec3(iw[1]);
+    const glm::vec3 iz = glm::vec3(iw[2]);
+
+    if (std::abs(glm::dot(d, ix)) > ihl) return false;
+    if (std::abs(glm::dot(d, iy)) > ihw) return false;
+    if (std::abs(glm::dot(d, iz)) > ihh) return false;
+    return true;
 }
 
-// Refresh `blocked` on every physical sensor (those carrying a
-// DetectionVolumeComponent) from current item poses. Virtual sensors are not
-// in this view and are left untouched.
+// Refresh `blocked` on every laser sensor from current item poses. Virtual
+// sensors (no LaserSensorComponent) are not in this view and are left
+// untouched — their `blocked` is written by orchestration code.
 inline void scan(FactoryScene& scene) {
     auto& reg = scene.registry();
     auto items = reg.view<SpawnedItemComponent, PoseComponent>();
 
-    for (auto&& [sensor_e, sc, dv] :
-         reg.view<SensorComponent, DetectionVolumeComponent>().each())
+    // LaserSensorComponent is an empty marker — EnTT's .each() drops empty
+    // types from the tuple, so we only bind entity + SensorComponent here.
+    for (auto&& [sensor_e, sc] :
+         reg.view<SensorComponent, LaserSensorComponent>().each())
     {
-        (void)dv;
         bool blocked = false;
         for (auto item_e : items) {
-            if (item_in_volume(reg, item_e, sensor_e)) {
+            if (item_at_laser(reg, item_e, sensor_e)) {
                 blocked = true;
                 break;
             }

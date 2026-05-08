@@ -47,8 +47,25 @@ inline LifecycleEvents step(FactoryScene& scene, float dt) {
 
                 auto  item  = reg.create();
                 auto& ipose = reg.emplace<PoseComponent>(item);
-                glm::mat4 pw   = world_transform(src.out_port(), reg);
-                ipose.position = Vec3(pw[3]);
+
+                // Spawn the item with its leading edge at the port — i.e.
+                // shift its centre back by half the item's extent along the
+                // port's forward direction. This keeps the freshly spawned
+                // item from clipping into the previous one (whose trailing
+                // edge has only just cleared the source's laser).
+                const glm::mat4 pw   = world_transform(src.out_port(), reg);
+                const glm::vec3 ppos = glm::vec3(pw[3]);
+                const glm::vec3 pdir = glm::vec3(pw[0]);
+                float half_along_belt = 0.f;
+                if (const auto* proto =
+                        reg.try_get<ItemPrototypeComponent>(src.prototype()))
+                {
+                    half_along_belt =
+                        std::abs(pdir.x) * proto->length_mm() * 0.5f
+                      + std::abs(pdir.y) * proto->width_mm()  * 0.5f
+                      + std::abs(pdir.z) * proto->height_mm() * 0.5f;
+                }
+                ipose.position = ppos - pdir * half_along_belt;
                 ipose.parent   = scene.root_entity();
 
                 reg.emplace<ItemOnTransportComponent>(item).set_transport(port->transport());
@@ -76,7 +93,7 @@ inline LifecycleEvents step(FactoryScene& scene, float dt) {
         std::vector<entt::entity> to_despawn;
         for (auto sensor_e : port->sensors()) {
             for (auto item_e : items) {
-                if (sensor::item_in_volume(reg, item_e, sensor_e))
+                if (sensor::item_at_laser(reg, item_e, sensor_e))
                     to_despawn.push_back(item_e);
             }
         }

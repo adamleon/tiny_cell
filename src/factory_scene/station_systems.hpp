@@ -23,7 +23,7 @@ inline entt::entity find_item_at_port(const entt::registry& reg, entt::entity po
 
     for (auto sensor_e : port->sensors()) {
         for (auto item_e : items) {
-            if (sensor::item_in_volume(reg, item_e, sensor_e))
+            if (sensor::item_at_laser(reg, item_e, sensor_e))
                 return item_e;
         }
     }

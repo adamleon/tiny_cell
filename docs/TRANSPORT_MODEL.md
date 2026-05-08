@@ -13,7 +13,7 @@ For the broader entity-system overview see [ENTITY_SYSTEM.md](ENTITY_SYSTEM.md).
 ## The unified mental model
 
 ```
-                 sensors (own pose, optionally a detection volume)
+                 sensors (own pose, optionally a laser-sensor marker)
                           ▲ scanned/written by
                           │
    port ─── exposes ───── sensor list (AND-gated; clear iff every sensor is unblocked)
@@ -64,16 +64,13 @@ SensorComponent
 
 Every sensor entity has `SensorComponent + PoseComponent`. The pose is parented to the port that lists this sensor, so the sensor's world pose follows the port's parent chain.
 
-### `DetectionVolumeComponent`
+### `LaserSensorComponent`
 
-```
-DetectionVolumeComponent
-  length_mm   int   — extent along sensor-local +x (typically belt direction)
-  width_mm    int   — extent along sensor-local +y
-  height_mm   int   — extent along sensor-local +z
-```
+Empty marker — its **presence on a sensor entity makes it a laser**: a real point in 3D at the sensor's world position. The scan system (see *Systems*) updates the sensor's `blocked` field each tick by checking whether any item's bounding box (from `ItemPrototypeComponent`) currently encloses the laser point. The sensor itself carries no extents; the item's collision box decides whether it counts as "on" the laser.
 
-**Presence of this component marks a sensor as physical.** A scan system (see *Systems*) updates the sensor's `blocked` field each tick by testing item positions against this volume. A sensor without `DetectionVolumeComponent` is **virtual** — its `blocked` is written by station code or other systems.
+A sensor without `LaserSensorComponent` is **virtual** — its `blocked` is written by station code or other systems.
+
+This matches a real photoeye: the beam is at a specific (x, y, z), and an item triggers it iff the item's body is occupying that point. Items at different heights or cross-belt offsets do not interfere with each other's lasers.
 
 ### `PortComponent`
 
@@ -174,12 +171,12 @@ There are four system entry points. They run in a fixed order each tick (see *Ti
 
 ### `sensor::scan(scene)`
 
-For every entity carrying `SensorComponent + DetectionVolumeComponent + PoseComponent`:
-1. Compute the sensor's world transform (parent-chain).
-2. For every spawned item, transform its world pose into the sensor's local frame.
-3. Set `blocked = true` if any item's centre falls within ±half-extents along all three axes.
+For every entity carrying `SensorComponent + LaserSensorComponent + PoseComponent`:
+1. Compute the sensor's world position from its parent-chain transform.
+2. For every spawned item, project `(sensor_pos − item_centre)` onto each item-local axis and compare against the item's half-extent on that axis (from `ItemPrototypeComponent`).
+3. Set `blocked = true` if all three projections are within range — i.e. the laser point is inside the item's oriented bounding box.
 
-Virtual sensors (no `DetectionVolumeComponent`) are skipped — their `blocked` is written by other systems.
+Virtual sensors (no `LaserSensorComponent`) are skipped — their `blocked` is written by other systems.
 
 ### `transport::step(scene, dt)`
 
@@ -344,7 +341,7 @@ The kinematic motion in this model is confined to two functions: `transport::ste
 Discipline maintained today to keep this swap small:
 
 1. **Confine motion to `transport::step`.** No motion equations elsewhere.
-2. **Sensors are read only via `port_is_clear()` and `SensorComponent::blocked()`.** Callers never reach into `DetectionVolumeComponent` or iterate items themselves.
+2. **Sensors are read only via `port_is_clear()` and `SensorComponent::blocked()`.** Callers never reach into `LaserSensorComponent` or iterate items themselves.
 3. **No APIs that depend on kinematic determinism** (e.g. "compute time-until-arrival"). Physics has no deterministic ETA.
 
 The component contracts, port/sensor model, and station dispatch carry over unchanged.

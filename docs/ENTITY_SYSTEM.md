@@ -31,7 +31,7 @@ Every visible or interactive element is an entity, referenced by a stable `entt:
 | Robot | User / blueprint import | Pose, Robot *(future)*, Visual *(future)*, Interactive *(future)* |
 | ConveyorBelt | User / workflow *(future)* | Pose, Transport, ConveyorBelt, Visual *(future)*, Interactive *(future)* |
 | Port | User / workflow *(future)* | Pose, Port |
-| Sensor | User / workflow *(future)* | Pose, Sensor, DetectionVolume *(physical sensors only)* |
+| Sensor | User / workflow *(future)* | Pose, Sensor, LaserSensor *(physical sensors only)* |
 | Picker | User / workflow *(future)* | Pose, Transport, PickerTransport, Visual *(future)* |
 | Station | User / workflow *(future)* | Pose, Station, *type-specific* (Palletize, …), Visual *(future)* |
 | Source | User / workflow *(future)* | Pose, Source, Visual *(future)* |
@@ -252,20 +252,18 @@ SensorComponent
   blocked   bool   — current reading; true = "do not flow into here"
 ```
 
-Physical sensors (those that also carry `DetectionVolumeComponent`) are auto-updated by `SensorScanSystem` from item poses overlapping the volume. Virtual sensors (no `DetectionVolumeComponent`) have `blocked` written by orchestration code (typically `StationSystem`).
+Physical sensors (those that also carry `LaserSensorComponent`) are auto-updated by `SensorScanSystem` — they trigger when an item's bounding box encloses the sensor's world position. Virtual sensors (no `LaserSensorComponent`) have `blocked` written by orchestration code (typically `StationSystem`).
 
-### DetectionVolumeComponent
+### LaserSensorComponent
 
-Marks a sensor as physical. Presence of this component causes the scan system to update the sensor each tick.
+Empty marker. Its presence on a sensor entity makes it a **laser**: a real point in 3D at the sensor's world position. The scan system tests every spawned item's bounding box against this point and sets `blocked` accordingly. The sensor itself carries no extents — the item's collision box (from `ItemPrototypeComponent`) decides whether it counts as occupying the laser.
 
 ```
-DetectionVolumeComponent
-  length_mm   int   — extent along sensor-local +x
-  width_mm    int   — extent along sensor-local +y
-  height_mm   int   — extent along sensor-local +z
+LaserSensorComponent
+  (no fields — marker)
 ```
 
-The sensor's `PoseComponent` is parented to the port it gates, so the volume inherits the port's parent-chain orientation (e.g. aligned with belt direction).
+The sensor's `PoseComponent` is parented to the port it gates, so the world position tracks the port's parent-chain transform automatically.
 
 ### ItemOnTransportComponent
 
@@ -360,7 +358,7 @@ Raycasts against hit geometry in InteractiveComponents. On hit, invokes the enti
 
 **Trigger:** each simulation tick, before TransportSystem.
 
-For every entity carrying `SensorComponent + DetectionVolumeComponent + PoseComponent`, transform every spawned item's world pose into sensor-local space and set `blocked = true` if any item centre falls within ±half-extents along all three axes. Virtual sensors (no `DetectionVolumeComponent`) are skipped.
+For every entity carrying `SensorComponent + LaserSensorComponent + PoseComponent`, project `(sensor_pos − item_centre)` onto each item-local axis (from `ItemPrototypeComponent` half-extents) and set `blocked = true` if all three projections are within range — i.e. the laser point sits inside the item's oriented bounding box. Virtual sensors (no `LaserSensorComponent`) are skipped.
 
 ### TransportSystem *(future)*
 

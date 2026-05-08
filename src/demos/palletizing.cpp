@@ -138,71 +138,34 @@ int main() {
         ss.scene->add(grp);
     }
 
-    // ── Simulation wiring (single pallet belt with mid-stream tap) ────────────
+    // ── Workflow declaration ──────────────────────────────────────────────────
+    // Define what the cell *does*; let solve_workflow() figure out the layout.
     auto& reg = scene.registry();
 
-    // Pallet belt: 6000 mm, +y. Entry at south end, exit at north end, tap at
-    // mid-belt (= world (0, 0, 0)).
-    auto pallet_belt = scene.add_belt(800, 6000, 0, 200.f, {0.f, 1.f, 0.f});
-    auto pal_entry   = scene.add_port("pal_entry", {0.f, -3000.f, 0.f}, {0.f, 1.f, 0.f});
-    auto pal_exit    = scene.add_port("pal_exit",  {0.f,  3000.f, 0.f}, {0.f, 1.f, 0.f});
-    scene.connect_belt(pallet_belt, pal_entry, pal_exit);
-    scene.set_port_transport(pal_entry, pallet_belt);
-
-    // Claim-and-fill tap: separate gate / detect ports at the same belt
-    // position. The pallet's body trips the detect laser as soon as it
-    // arrives; the station then writes its virtual sensor on the gate
-    // port to halt the belt while it fills the pallet, and clears it on
-    // release so the belt carries the full pallet onward.
-    auto pal_tap = scene.add_claim_station_taps(pallet_belt, 3000, "pal_tap");
-
-    // Spawn-throttle laser at the entry — gap between consecutive pallets
-    // emerges from the pallet's own body length, no sensor sizing needed.
-    scene.add_laser_sensor(pal_entry);
-
-    // Sink-side laser — pallet trips this when it arrives.
-    scene.add_laser_sensor(pal_exit);
-
-    // Box belt: 2800 mm, +x at height 800.
-    auto box_belt  = scene.add_belt(300, 2800, 800, 200.f, {1.f, 0.f, 0.f});
-    auto box_entry = scene.add_port("box_entry", {-2400.f, 0.f, 800.f}, {1.f, 0.f, 0.f});
-    auto box_exit  = scene.add_port("box_exit",  {  400.f, 0.f, 800.f}, {1.f, 0.f, 0.f});
-    scene.connect_belt(box_belt, box_entry, box_exit);
-    scene.set_port_transport(box_entry, box_belt);
-
-    // Box spawn throttle and stop-here lasers (no sensor sizing required).
-    scene.add_laser_sensor(box_entry);
-    scene.add_laser_sensor(box_exit);
-    auto box_exit_virt = scene.add_virtual_sensor(box_exit);   // station-driven
-
-    // Prototypes.
     auto pallet_proto = scene.add_prototype(1200, 800, 145, 0xC8A060u);
     auto box_proto    = scene.add_prototype(250,  250, 200, 0x8B4513u);
 
-    // Sources — rates tuned so the pallet fills in roughly 30 s.
-    scene.add_source( 360.f, pallet_proto, pal_entry);
-    scene.add_source(1800.f, box_proto,    box_entry);
+    auto pallet_source = scene.declare_source( 360.f, pallet_proto);
+    auto box_source    = scene.declare_source(1800.f, box_proto);
+    auto pallet_sink   = scene.declare_sink();
+    auto palletizer    = scene.declare_palletizer_station(pallet_proto, box_proto);
 
-    // Sink at the north end of the pallet belt.
-    scene.add_sink(pal_exit);
+    scene.declare_flow(pallet_source, palletizer);    // pallets in
+    scene.declare_flow(box_source,    palletizer);    // boxes in
+    scene.declare_flow(palletizer,    pallet_sink);   // full pallets out
 
-    // Magic placeholder transport — same dispatch contract as a picker but
-    // with whimsical motion. Boxes ride it (via parent chain) through a
-    // swirling, tumbling arc and fall into place on the pallet.
-    auto agent = scene.add_magic_transport(factory::Vec3{-1000.f, 0.f, 1500.f}, 1.5f);
+    scene.solve_workflow();
 
-    // Station entity.
-    auto station_e = reg.create();
-    auto& sc = reg.emplace<factory::StationComponent>(station_e);
-    sc.set_arrival_port(box_exit);
-    sc.set_arrival_virtual_sensor(box_exit_virt);
-    sc.add_picker(agent);
-
-    auto& palc = reg.emplace<factory::PalletizeComponent>(station_e);
-    palc.set_pallet_arrival_port(pal_tap.detect_port);
-    palc.set_pallet_tap_virtual_sensor(pal_tap.virtual_sensor);
-    palc.set_pattern(std::make_shared<factory::GridPattern>());
-    palc.set_pallet_dimensions(1200, 800, 145, 1500);
+    // The render loop scrolls the belt textures based on whether each belt is
+    // actually moving. solve_workflow placed the belts; we pick them out
+    // here by surface height (pallet belt at z=0, box belt at z=800).
+    entt::entity pallet_belt = entt::null;
+    entt::entity box_belt    = entt::null;
+    reg.view<factory::ConveyorBeltComponent>().each(
+        [&](auto e, const factory::ConveyorBeltComponent& bc) {
+            if (bc.surface_height_mm() == 0)   pallet_belt = e;
+            if (bc.surface_height_mm() == 800) box_belt    = e;
+        });
 
     // ── Animate ───────────────────────────────────────────────────────────────
     Clock clock;

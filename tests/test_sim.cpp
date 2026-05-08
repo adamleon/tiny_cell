@@ -1242,6 +1242,95 @@ TEST(station_does_not_release_while_picker_busy) {
     REQUIRE(reg.get<factory::SensorComponent>(pf.pallet_tap_virt).blocked());
 }
 
+// ── Workflow solver ─────────────────────────────────────────────────────────
+
+TEST(workflow_solve_palletizer_wires_everything) {
+    // Declarative API: define entities and their relationships, let the
+    // solver pick belt geometry, ports, sensors, and a transport.
+    factory::FactoryScene scene;
+    auto& reg = scene.registry();
+
+    auto pallet_proto = scene.add_prototype(1200, 800, 145, 0u);
+    auto box_proto    = scene.add_prototype(250,  250, 200, 0u);
+
+    auto pallet_source = scene.declare_source( 360.f, pallet_proto);
+    auto box_source    = scene.declare_source(1800.f, box_proto);
+    auto pallet_sink   = scene.declare_sink();
+    auto palletizer    = scene.declare_palletizer_station(pallet_proto, box_proto);
+
+    scene.declare_flow(pallet_source, palletizer);
+    scene.declare_flow(box_source,    palletizer);
+    scene.declare_flow(palletizer,    pallet_sink);
+
+    scene.solve_workflow();
+
+    // Each declared source / sink / station should now have its ports wired.
+    REQUIRE(reg.get<factory::SourceComponent>(pallet_source).out_port() != entt::null);
+    REQUIRE(reg.get<factory::SourceComponent>(box_source).out_port()    != entt::null);
+    REQUIRE(reg.get<factory::SinkComponent>(pallet_sink).in_port()      != entt::null);
+
+    const auto& sc = reg.get<factory::StationComponent>(palletizer);
+    REQUIRE(sc.arrival_port()           != entt::null);
+    REQUIRE(sc.arrival_virtual_sensor() != entt::null);
+    REQUIRE_EQ(static_cast<int>(sc.pickers().size()), 1);
+
+    const auto& palc = reg.get<factory::PalletizeComponent>(palletizer);
+    REQUIRE(palc.pallet_arrival_port()       != entt::null);
+    REQUIRE(palc.pallet_tap_virtual_sensor() != entt::null);
+    REQUIRE(palc.pattern() != nullptr);
+
+    // Two belts: pallet (z=0) and box (z=800).
+    int belts = 0;
+    reg.view<factory::ConveyorBeltComponent>().each(
+        [&](auto, const factory::ConveyorBeltComponent&) { ++belts; });
+    REQUIRE_EQ(belts, 2);
+}
+
+TEST(workflow_solve_runs_full_palletizer_cycle) {
+    // Same setup as the manual-wiring integration test, but build the scene
+    // through the declarative API and then drive the sim. Confirms the
+    // solver produces a scene that actually works end-to-end.
+    factory::FactoryScene scene;
+    auto& reg = scene.registry();
+
+    auto pallet_proto = scene.add_prototype(1200, 800, 145, 0u);
+    auto box_proto    = scene.add_prototype(250,  250, 200, 0u);
+
+    auto pallet_source = scene.declare_source( 360.f, pallet_proto);
+    auto box_source    = scene.declare_source(1800.f, box_proto);
+    auto pallet_sink   = scene.declare_sink();
+    auto palletizer    = scene.declare_palletizer_station(pallet_proto, box_proto);
+
+    scene.declare_flow(pallet_source, palletizer);
+    scene.declare_flow(box_source,    palletizer);
+    scene.declare_flow(palletizer,    pallet_sink);
+
+    scene.solve_workflow();
+
+    // 90 s simulated at the demo's clamped tick rate.
+    int pallets_completed = 0;
+    const float dt          = 0.05f;
+    const int   total_ticks = 1800;
+
+    for (int tick = 0; tick < total_ticks; ++tick) {
+        factory::sensor::scan(scene);
+        factory::transport::step(scene, dt);
+        factory::station::step(scene, dt);
+        auto events = factory::lifecycle::step(scene, dt);
+        for (auto e : events.despawned) {
+            if (auto* palletc = reg.try_get<factory::PalletComponent>(e)) {
+                REQUIRE_EQ(static_cast<int>(palletc->items().size()), 12);
+                ++pallets_completed;
+                for (auto child : palletc->items())
+                    if (reg.valid(child)) reg.destroy(child);
+            }
+            if (reg.valid(e)) reg.destroy(e);
+        }
+    }
+
+    REQUIRE(pallets_completed >= 1);
+}
+
 // ── End-to-end palletizer integration ───────────────────────────────────────
 //
 // Runs the full demo-style palletizing scene (single mid-tap pallet belt,
@@ -1475,6 +1564,10 @@ int main() {
     RUN(station_arrival_virtual_clear_with_pallet_and_idle_picker);
     RUN(station_releases_full_pallet_when_all_pickers_idle);
     RUN(station_does_not_release_while_picker_busy);
+
+    // Workflow solver
+    RUN(workflow_solve_palletizer_wires_everything);
+    RUN(workflow_solve_runs_full_palletizer_cycle);
 
     // End-to-end integration
     RUN(palletizer_integration_runs_for_90_seconds);

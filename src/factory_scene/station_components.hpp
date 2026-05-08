@@ -24,6 +24,14 @@ private:
     std::vector<entt::entity> pickers_;
 };
 
+// Workflow declaration for a palletizer: which prototypes does this station
+// accept as inputs? Read by the workflow solver to match flow declarations
+// to source entities. Persists after the solve completes.
+struct PalletizerInputs {
+    entt::entity pallet_proto = entt::null;
+    entt::entity box_proto    = entt::null;
+};
+
 // Palletize: type-specific addition to a station. Combined with
 // StationComponent on the same entity. The station has a pallet to fill iff
 // `current_pallet != null` — no separate state enum needed.

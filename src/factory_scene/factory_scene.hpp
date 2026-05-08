@@ -1,8 +1,11 @@
 #pragma once
 #include <cmath>
 #include <entt/entt.hpp>
+#include <memory>
 #include <unordered_map>
+#include <vector>
 #include "components.hpp"
+#include "placement_pattern.hpp"
 #include "solver/solver.hpp"
 #include "station_components.hpp"
 
@@ -367,6 +370,144 @@ public:
         registry_.emplace<SinkComponent>(e).set_in_port(exit_port);
         return e;
     }
+
+    // ── Declarative workflow API ─────────────────────────────────────────────
+    //
+    // Higher-level than the add_belt / add_port / add_source primitives: the
+    // user describes the *flow graph* (which sources feed which station,
+    // which station feeds which sink) and solve_workflow() figures out the
+    // belt/port/sensor layout. The lower-level primitives stay available
+    // for power users and the workflow solver itself.
+    //
+    // v0 of the workflow solver only handles the palletizer pattern (one
+    // pallet source + one box source + one palletizer station + one sink).
+    // The layout it produces matches the manually-wired demo: a 6 m pallet
+    // belt with a mid-tap, a 2.8 m box belt at z=800, lasers at every port,
+    // a magic transport at home. Future iterations: cell-bounds-aware
+    // placement, multi-station, other station archetypes.
+
+    entt::entity declare_source(float rate_per_hour, entt::entity prototype) {
+        auto e = registry_.create();
+        auto& sc = registry_.emplace<SourceComponent>(e);
+        sc.set_rate_per_hour(rate_per_hour);
+        sc.set_prototype(prototype);
+        // out_port is left null — solve_workflow() fills it in.
+        return e;
+    }
+
+    entt::entity declare_sink() {
+        auto e = registry_.create();
+        registry_.emplace<SinkComponent>(e);
+        // in_port left null — solve_workflow() fills it in.
+        return e;
+    }
+
+    entt::entity declare_palletizer_station(entt::entity pallet_proto,
+                                            entt::entity box_proto)
+    {
+        auto e = registry_.create();
+        registry_.emplace<StationComponent>(e);
+        auto& palc = registry_.emplace<PalletizeComponent>(e);
+        palc.set_pattern(std::make_shared<GridPattern>());
+        if (const auto* p = registry_.try_get<ItemPrototypeComponent>(pallet_proto)) {
+            palc.set_pallet_dimensions(p->length_mm(), p->width_mm(),
+                                       p->height_mm(), 1500);
+        }
+        registry_.emplace<PalletizerInputs>(e, pallet_proto, box_proto);
+        return e;
+    }
+
+    void declare_flow(entt::entity from, entt::entity to) {
+        flows_.push_back({from, to});
+    }
+
+    // Build belts, ports, sensors, picker, and wire everything to the
+    // declared sources / sinks / station.
+    void solve_workflow();
+
+private:
+    struct WorkflowFlow {
+        entt::entity from;
+        entt::entity to;
+    };
+    std::vector<WorkflowFlow> flows_;
 };
+
+inline void FactoryScene::solve_workflow() {
+    auto& reg = registry_;
+
+    // ── Find the palletizer station and its declared input prototypes ───
+    // (v0: assume a single palletizer.)
+    entt::entity palletizer   = entt::null;
+    entt::entity pallet_proto = entt::null;
+    entt::entity box_proto    = entt::null;
+    {
+        auto view = reg.view<PalletizerInputs>();
+        auto it   = view.begin();
+        if (it == view.end()) return;
+        palletizer            = *it;
+        const auto& inputs    = view.get<PalletizerInputs>(palletizer);
+        pallet_proto          = inputs.pallet_proto;
+        box_proto             = inputs.box_proto;
+    }
+
+    // ── Match flows to the actual entities ──────────────────────────────
+    entt::entity pallet_source = entt::null;
+    entt::entity box_source    = entt::null;
+    entt::entity pallet_sink   = entt::null;
+    for (const auto& f : flows_) {
+        if (f.to == palletizer) {
+            if (const auto* sc = reg.try_get<SourceComponent>(f.from)) {
+                if (sc->prototype() == pallet_proto) pallet_source = f.from;
+                else if (sc->prototype() == box_proto) box_source  = f.from;
+            }
+        }
+        if (f.from == palletizer && reg.any_of<SinkComponent>(f.to)) {
+            pallet_sink = f.to;
+        }
+    }
+
+    // ── Lay out the pallet belt: source → tap → sink, +y direction ──────
+    auto pallet_belt = add_belt(800, 6000, 0, 1000.f, {0.f, 1.f, 0.f});
+    auto pal_entry   = add_port("pal_entry", {0.f, -3000.f, 0.f}, {0.f, 1.f, 0.f});
+    auto pal_exit    = add_port("pal_exit",  {0.f,  3000.f, 0.f}, {0.f, 1.f, 0.f});
+    connect_belt(pallet_belt, pal_entry, pal_exit);
+    set_port_transport(pal_entry, pallet_belt);
+
+    auto pal_tap = add_claim_station_taps(pallet_belt, 3000, "pal_tap");
+    add_laser_sensor(pal_entry);
+    add_laser_sensor(pal_exit);
+
+    // ── Lay out the box belt: source → station, +x at z=800 ─────────────
+    auto box_belt  = add_belt(300, 2800, 800, 1000.f, {1.f, 0.f, 0.f});
+    auto box_entry = add_port("box_entry", {-2400.f, 0.f, 800.f}, {1.f, 0.f, 0.f});
+    auto box_exit  = add_port("box_exit",  {  400.f, 0.f, 800.f}, {1.f, 0.f, 0.f});
+    connect_belt(box_belt, box_entry, box_exit);
+    set_port_transport(box_entry, box_belt);
+
+    add_laser_sensor(box_entry);
+    add_laser_sensor(box_exit);
+    auto box_exit_virt = add_virtual_sensor(box_exit);
+
+    // ── Wire sources / sinks to the appropriate ports ───────────────────
+    if (pallet_source != entt::null)
+        reg.get<SourceComponent>(pallet_source).set_out_port(pal_entry);
+    if (box_source != entt::null)
+        reg.get<SourceComponent>(box_source).set_out_port(box_entry);
+    if (pallet_sink != entt::null)
+        reg.get<SinkComponent>(pallet_sink).set_in_port(pal_exit);
+
+    // ── Add the picker and finish wiring the station ────────────────────
+    auto picker = add_magic_transport(Vec3{-1000.f, 0.f, 1500.f}, 1.5f);
+
+    auto& sc = reg.get<StationComponent>(palletizer);
+    sc.set_arrival_port(box_exit);
+    sc.set_arrival_virtual_sensor(box_exit_virt);
+    sc.add_picker(picker);
+
+    auto& palc = reg.get<PalletizeComponent>(palletizer);
+    palc.set_pallet_arrival_port(pal_tap.detect_port);
+    palc.set_pallet_tap_virtual_sensor(pal_tap.virtual_sensor);
+}
 
 }  // namespace factory

@@ -34,6 +34,15 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(glm)
 
+# ── Warning flags (compiler-portable) ─────────────────────────────────────────
+if(MSVC)
+    set(TINYCELL_WARNINGS         /W4)
+    set(TINYCELL_WARNINGS_WERROR  /W4 /WX)
+else()
+    set(TINYCELL_WARNINGS         -Wall -Wextra)
+    set(TINYCELL_WARNINGS_WERROR  ${TINYCELL_WARNINGS_WERROR})
+endif()
+
 # ── Demo helper ───────────────────────────────────────────────────────────────
 function(add_demo name)
     add_executable(${name} src/demos/${name}.cpp)
@@ -42,7 +51,7 @@ function(add_demo name)
         src
         ${threepp_SOURCE_DIR}/src/external/nlohmann
     )
-    target_compile_options(${name} PRIVATE -Wall -Wextra)
+    target_compile_options(${name} PRIVATE ${TINYCELL_WARNINGS})
 endfunction()
 
 # ── Demos ─────────────────────────────────────────────────────────────────────
@@ -56,7 +65,7 @@ add_executable(GenLookup src/tools/gen_lookup.cpp)
 target_include_directories(GenLookup PRIVATE
     ${threepp_SOURCE_DIR}/src/external/nlohmann
 )
-target_compile_options(GenLookup PRIVATE -Wall -Wextra)
+target_compile_options(GenLookup PRIVATE ${TINYCELL_WARNINGS})
 
 # ── Unit tests (no threepp; data model + solver only) ────────────────────────
 enable_testing()
@@ -66,7 +75,7 @@ target_include_directories(TestCell PRIVATE
     src
     ${threepp_SOURCE_DIR}/src/external/nlohmann
 )
-target_compile_options(TestCell PRIVATE -Wall -Wextra -Werror)
+target_compile_options(TestCell PRIVATE ${TINYCELL_WARNINGS_WERROR})
 
 add_test(NAME cell_tests
     COMMAND TestCell
@@ -78,7 +87,7 @@ target_include_directories(TestSolver PRIVATE
     src
     ${threepp_SOURCE_DIR}/src/external/nlohmann
 )
-target_compile_options(TestSolver PRIVATE -Wall -Wextra -Werror)
+target_compile_options(TestSolver PRIVATE ${TINYCELL_WARNINGS_WERROR})
 
 add_test(NAME solver_tests
     COMMAND TestSolver
@@ -91,7 +100,7 @@ target_include_directories(TestFactoryScene PRIVATE
     src
     ${threepp_SOURCE_DIR}/src/external/nlohmann
 )
-target_compile_options(TestFactoryScene PRIVATE -Wall -Wextra -Werror)
+target_compile_options(TestFactoryScene PRIVATE ${TINYCELL_WARNINGS_WERROR})
 
 add_test(NAME factory_scene_tests
     COMMAND TestFactoryScene
@@ -104,7 +113,7 @@ target_include_directories(TestSim PRIVATE
     src
     ${threepp_SOURCE_DIR}/src/external/nlohmann
 )
-target_compile_options(TestSim PRIVATE -Wall -Wextra -Werror)
+target_compile_options(TestSim PRIVATE ${TINYCELL_WARNINGS_WERROR})
 
 add_test(NAME sim_tests
     COMMAND TestSim

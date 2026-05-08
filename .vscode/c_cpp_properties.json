@@ -1,6 +1,18 @@
 {
     "configurations": [
         {
+            "name": "Windows-MSVC",
+            "compileCommands": "${workspaceFolder}/build-msvc/compile_commands.json",
+            "cppStandard": "c++20",
+            "intelliSenseMode": "windows-msvc-x64"
+        },
+        {
+            "name": "Windows-MinGW",
+            "compileCommands": "${workspaceFolder}/build-mingw/compile_commands.json",
+            "cppStandard": "c++20",
+            "intelliSenseMode": "windows-gcc-x64"
+        },
+        {
             "name": "Linux",
             "compileCommands": "${workspaceFolder}/build/compile_commands.json",
             "cppStandard": "c++20",

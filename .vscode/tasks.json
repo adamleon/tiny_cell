@@ -2,33 +2,55 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "cmake configure",
-            "type": "shell",
-            "command": "cmake",
+            "label": "cmake configure (msvc)",
+            "type": "process",
+            "command": "powershell",
             "args": [
-                "-S", "${workspaceFolder}",
-                "-B", "${workspaceFolder}/build",
-                "-DCMAKE_BUILD_TYPE=Release",
-                "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
+                "-NoProfile",
+                "-ExecutionPolicy", "Bypass",
+                "-File", "${workspaceFolder}/.vscode/with-msvc.ps1",
+                "configure"
             ],
-            "group": "build",
             "presentation": { "reveal": "always" },
             "problemMatcher": []
         },
         {
-            "label": "cmake build",
+            "label": "cmake build (msvc)",
+            "type": "process",
+            "command": "powershell",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy", "Bypass",
+                "-File", "${workspaceFolder}/.vscode/with-msvc.ps1",
+                "build"
+            ],
+            "group": "build",
+            "problemMatcher": "$msCompile"
+        },
+        {
+            "label": "cmake configure (mingw)",
             "type": "shell",
             "command": "cmake",
             "args": [
-                "--build", "${workspaceFolder}/build",
-                "--config", "Release",
+                "-S", "${workspaceFolder}",
+                "-B", "${workspaceFolder}/build-mingw",
+                "-G", "MinGW Makefiles",
+                "-DCMAKE_BUILD_TYPE=Release",
+                "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
+            ],
+            "presentation": { "reveal": "always" },
+            "problemMatcher": []
+        },
+        {
+            "label": "cmake build (mingw)",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "--build", "${workspaceFolder}/build-mingw",
                 "--parallel", "4"
             ],
-            "dependsOn": ["cmake configure"],
-            "group": {
-                "kind": "build",
-                "isDefault": true
-            },
+            "dependsOn": ["cmake configure (mingw)"],
+            "group": "build",
             "problemMatcher": "$gcc"
         }
     ]

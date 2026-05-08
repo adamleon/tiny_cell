@@ -1,11 +1,14 @@
 # Build
 build/
+build-msvc/
+build-mingw/
 
 # CMake user-specific files
 CMakeUserPresets.json
 
 # Editor
 .vscode/*.db
+.vscode/.vcvars-cache.json
 *.swp
 *~
 

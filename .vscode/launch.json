@@ -2,13 +2,30 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "fence_walls (Windows)",
+            "name": "fence_walls (MSVC)",
             "type": "cppvsdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/build/fence_walls.exe",
+            "program": "${workspaceFolder}/build-msvc/fence_walls.exe",
             "args": [],
             "cwd": "${workspaceFolder}",
-            "preLaunchTask": "cmake build"
+            "preLaunchTask": "cmake build (msvc)"
+        },
+        {
+            "name": "fence_walls (MinGW)",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build-mingw/fence_walls.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "cmake build (mingw)",
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ]
         },
         {
             "name": "fence_walls (Linux/Mac)",
@@ -17,7 +34,6 @@
             "program": "${workspaceFolder}/build/fence_walls",
             "args": [],
             "cwd": "${workspaceFolder}",
-            "preLaunchTask": "cmake build",
             "MIMode": "gdb",
             "setupCommands": [
                 {
@@ -28,13 +44,30 @@
             ]
         },
         {
-            "name": "palletizing (Windows)",
+            "name": "palletizing (MSVC)",
             "type": "cppvsdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/build/palletizing.exe",
+            "program": "${workspaceFolder}/build-msvc/palletizing.exe",
             "args": [],
             "cwd": "${workspaceFolder}",
-            "preLaunchTask": "cmake build"
+            "preLaunchTask": "cmake build (msvc)"
+        },
+        {
+            "name": "palletizing (MinGW)",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build-mingw/palletizing.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "cmake build (mingw)",
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ]
         },
         {
             "name": "palletizing (Linux/Mac)",
@@ -43,7 +76,6 @@
             "program": "${workspaceFolder}/build/palletizing",
             "args": [],
             "cwd": "${workspaceFolder}",
-            "preLaunchTask": "cmake build",
             "MIMode": "gdb",
             "setupCommands": [
                 {
@@ -54,13 +86,30 @@
             ]
         },
         {
-            "name": "GenLookup (Windows)",
+            "name": "GenLookup (MSVC)",
             "type": "cppvsdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/build/GenLookup.exe",
+            "program": "${workspaceFolder}/build-msvc/GenLookup.exe",
             "args": [],
             "cwd": "${workspaceFolder}",
-            "preLaunchTask": "cmake build"
+            "preLaunchTask": "cmake build (msvc)"
+        },
+        {
+            "name": "GenLookup (MinGW)",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build-mingw/GenLookup.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "cmake build (mingw)",
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ]
         },
         {
             "name": "GenLookup (Linux/Mac)",
@@ -69,7 +118,6 @@
             "program": "${workspaceFolder}/build/GenLookup",
             "args": [],
             "cwd": "${workspaceFolder}",
-            "preLaunchTask": "cmake build",
             "MIMode": "gdb",
             "setupCommands": [
                 {

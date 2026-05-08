@@ -21,6 +21,8 @@
 #include "factory_scene/sensor_systems.hpp"
 #include "factory_scene/transport_systems.hpp"
 #include "factory_scene/lifecycle_systems.hpp"
+#include "factory_scene/station_systems.hpp"
+#include "factory_scene/placement_pattern.hpp"
 
 // ── Test harness ──────────────────────────────────────────────────────────────
 static int g_run = 0, g_fail = 0;
@@ -740,6 +742,478 @@ TEST(sink_despawns_item_at_in_port) {
     REQUIRE_EQ(total, 1);
 }
 
+// ── transport::step (multi-item-on-one-belt safety) ─────────────────────────
+
+TEST(belt_does_not_double_clamp_at_terminal_exit) {
+    // Two items on the same belt would both overshoot length_mm in one tick.
+    // The leader (higher start-of-tick t) should clamp to the exit position
+    // and the trailer should NOT advance — its iteration sees the belt
+    // already "frozen" for this tick.
+    factory::FactoryScene scene;
+    auto belt_e  = scene.add_belt(300, 1000, 0, 200.f, {1.f, 0.f, 0.f});
+    auto entry_e = scene.add_port("entry", {0.f,    0.f, 0.f}, {1.f, 0.f, 0.f});
+    auto exit_e  = scene.add_port("exit",  {1000.f, 0.f, 0.f}, {1.f, 0.f, 0.f});
+    scene.connect_belt(belt_e, entry_e, exit_e);
+
+    auto& reg = scene.registry();
+
+    auto leader = reg.create();
+    auto& lp    = reg.emplace<factory::PoseComponent>(leader);
+    lp.position = {950.f, 0.f, 0.f};
+    lp.parent   = scene.root_entity();
+    reg.emplace<factory::ItemOnTransportComponent>(leader).set_transport(belt_e);
+    reg.emplace<factory::SpawnedItemComponent>(leader);
+
+    auto trailer = reg.create();
+    auto& tp     = reg.emplace<factory::PoseComponent>(trailer);
+    tp.position  = {800.f, 0.f, 0.f};
+    tp.parent    = scene.root_entity();
+    reg.emplace<factory::ItemOnTransportComponent>(trailer).set_transport(belt_e);
+    reg.emplace<factory::SpawnedItemComponent>(trailer);
+
+    // dt = 2s × 200 mm/s = 400 mm advance — both would overshoot.
+    factory::transport::step(scene, 2.0f);
+
+    REQUIRE_NEAR(reg.get<factory::PoseComponent>(leader).position.x,  1000.f, 1.f);
+    REQUIRE_NEAR(reg.get<factory::PoseComponent>(trailer).position.x,  800.f, 1.f);
+}
+
+TEST(belt_does_not_double_handover) {
+    // Same shape but with a downstream belt — only the leader transfers,
+    // the trailer waits for the next tick.
+    factory::FactoryScene scene;
+
+    auto belt_a  = scene.add_belt(300, 1000, 0, 200.f, {1.f, 0.f, 0.f});
+    auto entry_a = scene.add_port("entry_a", {0.f,    0.f, 0.f}, {1.f, 0.f, 0.f});
+    auto exit_a  = scene.add_port("exit_a",  {1000.f, 0.f, 0.f}, {1.f, 0.f, 0.f});
+    auto belt_b  = scene.add_belt(300, 2000, 0, 200.f, {1.f, 0.f, 0.f});
+    auto entry_b = scene.add_port("entry_b", {1000.f, 0.f, 0.f}, {1.f, 0.f, 0.f});
+    auto exit_b  = scene.add_port("exit_b",  {3000.f, 0.f, 0.f}, {1.f, 0.f, 0.f});
+    scene.connect_belt(belt_a, entry_a, exit_a);
+    scene.connect_belt(belt_b, entry_b, exit_b);
+    scene.set_port_transport(exit_a, belt_b);
+
+    auto& reg = scene.registry();
+
+    auto leader = reg.create();
+    auto& lp    = reg.emplace<factory::PoseComponent>(leader);
+    lp.position = {950.f, 0.f, 0.f};
+    lp.parent   = scene.root_entity();
+    reg.emplace<factory::ItemOnTransportComponent>(leader).set_transport(belt_a);
+    reg.emplace<factory::SpawnedItemComponent>(leader);
+
+    auto trailer = reg.create();
+    auto& tp     = reg.emplace<factory::PoseComponent>(trailer);
+    tp.position  = {800.f, 0.f, 0.f};
+    tp.parent    = scene.root_entity();
+    reg.emplace<factory::ItemOnTransportComponent>(trailer).set_transport(belt_a);
+    reg.emplace<factory::SpawnedItemComponent>(trailer);
+
+    factory::transport::step(scene, 2.0f);
+
+    REQUIRE_EQ(scene.items_on(belt_a), 1);   // trailer still on A
+    REQUIRE_EQ(scene.items_on(belt_b), 1);   // leader handed off
+    REQUIRE_NEAR(reg.get<factory::PoseComponent>(trailer).position.x, 800.f, 1.f);
+}
+
+// ── MagicTransportComponent ─────────────────────────────────────────────────
+
+TEST(magic_default_state_idle) {
+    factory::MagicTransportComponent mt;
+    REQUIRE(mt.state()       == factory::PickerState::Idle);
+    REQUIRE(mt.current_box() == entt::null);
+    REQUIRE_NEAR(mt.elapsed_s(), 0.f, 1e-5f);
+}
+
+TEST(magic_setters_round_trip) {
+    factory::MagicTransportComponent mt;
+    mt.set_home_pose({100.f, 200.f, 300.f});
+    mt.set_pickup_target({400.f, 0.f, 800.f});
+    mt.set_drop_target({0.f, 0.f, 145.f});
+    mt.set_leg_duration_s(2.5f);
+    mt.set_elapsed_s(0.3f);
+    mt.set_leg_origin({100.f, 200.f, 300.f});
+    mt.set_state(factory::PickerState::Carrying);
+    REQUIRE_NEAR(mt.home_pose().x,     100.f, 1e-5f);
+    REQUIRE_NEAR(mt.pickup_target().z, 800.f, 1e-5f);
+    REQUIRE_NEAR(mt.drop_target().z,   145.f, 1e-5f);
+    REQUIRE_NEAR(mt.leg_duration_s(),  2.5f,  1e-5f);
+    REQUIRE_NEAR(mt.elapsed_s(),       0.3f,  1e-5f);
+    REQUIRE(mt.state() == factory::PickerState::Carrying);
+}
+
+TEST(magic_position_lands_on_endpoints) {
+    // Whatever the swirl does, the envelope must be 0 at t=0 and t=1 so the
+    // path lands exactly on origin and target.
+    factory::Vec3 origin{0.f, 0.f, 0.f};
+    factory::Vec3 target{1000.f, 500.f, 200.f};
+    auto p0 = factory::transport::magic::position(origin, target, 0.f);
+    auto p1 = factory::transport::magic::position(origin, target, 1.f);
+    REQUIRE_NEAR(p0.x, origin.x, 1e-3f);
+    REQUIRE_NEAR(p0.y, origin.y, 1e-3f);
+    REQUIRE_NEAR(p0.z, origin.z, 1e-3f);
+    REQUIRE_NEAR(p1.x, target.x, 1e-3f);
+    REQUIRE_NEAR(p1.y, target.y, 1e-3f);
+    REQUIRE_NEAR(p1.z, target.z, 1e-3f);
+}
+
+TEST(magic_position_handles_zero_length_leg) {
+    // Degenerate case — origin == target. Should not divide by zero.
+    factory::Vec3 p{42.f, -7.f, 13.f};
+    auto out = factory::transport::magic::position(p, p, 0.5f);
+    REQUIRE_NEAR(out.x, p.x, 1e-5f);
+    REQUIRE_NEAR(out.y, p.y, 1e-5f);
+    REQUIRE_NEAR(out.z, p.z, 1e-5f);
+}
+
+TEST(magic_idle_does_not_advance) {
+    factory::FactoryScene scene;
+    auto magic_e = scene.add_magic_transport({100.f, 200.f, 300.f}, 1.5f);
+    factory::transport::step(scene, 0.5f);
+    const auto& pose = scene.registry().get<factory::PoseComponent>(magic_e);
+    REQUIRE_NEAR(pose.position.x, 100.f, 1e-5f);
+    REQUIRE_NEAR(pose.position.y, 200.f, 1e-5f);
+    REQUIRE_NEAR(pose.position.z, 300.f, 1e-5f);
+}
+
+TEST(magic_completes_leg_and_grabs_box) {
+    factory::FactoryScene scene;
+    auto& reg = scene.registry();
+
+    auto magic_e = scene.add_magic_transport({0.f, 0.f, 0.f}, 1.0f);
+
+    // Box at the pickup target, riding a dummy belt.
+    auto box_e = reg.create();
+    auto& bp   = reg.emplace<factory::PoseComponent>(box_e);
+    bp.position = {500.f, 0.f, 0.f};
+    bp.parent   = scene.root_entity();
+    reg.emplace<factory::SpawnedItemComponent>(box_e);
+    auto dummy = reg.create();
+    reg.emplace<factory::TransportComponent>(dummy);
+    reg.emplace<factory::ItemOnTransportComponent>(box_e).set_transport(dummy);
+
+    auto& mt = reg.get<factory::MagicTransportComponent>(magic_e);
+    mt.set_pickup_target({500.f, 0.f, 0.f});
+    mt.set_drop_target({1000.f, 0.f, 0.f});
+    mt.set_current_box(box_e);
+    mt.set_state(factory::PickerState::MovingToBox);
+    mt.set_leg_origin({0.f, 0.f, 0.f});
+    mt.set_elapsed_s(0.f);
+
+    // Step past the leg duration — magic should clamp, transition to
+    // Carrying, and grab the box.
+    factory::transport::step(scene, 1.5f);
+
+    REQUIRE(mt.state() == factory::PickerState::Carrying);
+    REQUIRE(reg.get<factory::ItemOnTransportComponent>(box_e).transport() == magic_e);
+    REQUIRE(reg.get<factory::PoseComponent>(box_e).parent == magic_e);
+    // After Clamp, leg_origin reset to the pickup target for the next leg.
+    REQUIRE_NEAR(mt.leg_origin().x, 500.f, 1e-3f);
+}
+
+TEST(magic_drop_releases_box_to_container) {
+    factory::FactoryScene scene;
+    auto& reg = scene.registry();
+
+    auto magic_e = scene.add_magic_transport({0.f, 0.f, 0.f}, 1.0f);
+
+    // Container at world (1000, 0, 0).
+    auto container = reg.create();
+    auto& cp       = reg.emplace<factory::PoseComponent>(container);
+    cp.position    = {1000.f, 0.f, 0.f};
+    cp.parent      = scene.root_entity();
+
+    // Box riding the magic transport.
+    auto box_e = reg.create();
+    auto& bp   = reg.emplace<factory::PoseComponent>(box_e);
+    bp.position = {0.f, 0.f, 0.f};
+    bp.parent   = magic_e;
+    reg.emplace<factory::SpawnedItemComponent>(box_e);
+    reg.emplace<factory::ItemOnTransportComponent>(box_e).set_transport(magic_e);
+
+    auto& mt = reg.get<factory::MagicTransportComponent>(magic_e);
+    mt.set_drop_target({1000.f, 0.f, 0.f});
+    mt.set_drop_container(container);
+    mt.set_current_box(box_e);
+    mt.set_state(factory::PickerState::Carrying);
+    mt.set_leg_origin({0.f, 0.f, 0.f});
+    mt.set_elapsed_s(0.f);
+
+    factory::transport::step(scene, 1.5f);
+
+    REQUIRE(mt.state() == factory::PickerState::Returning);
+    REQUIRE(!reg.any_of<factory::ItemOnTransportComponent>(box_e));
+    REQUIRE(reg.get<factory::PoseComponent>(box_e).parent == container);
+}
+
+TEST(magic_returns_to_idle_at_home) {
+    factory::FactoryScene scene;
+    auto& reg = scene.registry();
+
+    auto magic_e = scene.add_magic_transport({0.f, 0.f, 0.f}, 1.0f);
+    auto& mpose  = reg.get<factory::PoseComponent>(magic_e);
+    mpose.position = {1000.f, 0.f, 0.f};
+
+    auto& mt = reg.get<factory::MagicTransportComponent>(magic_e);
+    mt.set_state(factory::PickerState::Returning);
+    mt.set_leg_origin({1000.f, 0.f, 0.f});
+    mt.set_current_box(magic_e);     // dummy non-null to verify clearing
+    mt.set_elapsed_s(0.f);
+
+    factory::transport::step(scene, 1.5f);
+
+    REQUIRE(mt.state()       == factory::PickerState::Idle);
+    REQUIRE(mt.current_box() == entt::null);
+    REQUIRE_NEAR(mpose.position.x, 0.f, 1e-3f);
+}
+
+// ── station::step ───────────────────────────────────────────────────────────
+
+// Helper: build a minimal palletizer station with one picker, a pallet
+// arrival port (with both physical and virtual sensors), and a box arrival
+// port (also with both sensor flavours). Mirrors the demo's wiring without
+// the threepp pieces.
+struct PalletizerFixture {
+    factory::FactoryScene scene;
+    entt::entity          station_e;
+    entt::entity          pallet_arrival_port;
+    entt::entity          pallet_tap_virt;
+    entt::entity          box_arrival_port;
+    entt::entity          box_arrival_virt;
+    entt::entity          picker;
+    entt::entity          box_proto;
+    entt::entity          pallet_proto;
+};
+
+static PalletizerFixture make_palletizer_fixture() {
+    PalletizerFixture pf;
+    auto& scene = pf.scene;
+    auto& reg   = scene.registry();
+
+    pf.pallet_arrival_port = scene.add_port("pal_arr", {0.f, 0.f, 0.f});
+    scene.add_physical_sensor(pf.pallet_arrival_port, 200, 900, 200);
+    pf.pallet_tap_virt = scene.add_virtual_sensor(pf.pallet_arrival_port);
+
+    pf.box_arrival_port  = scene.add_port("box_arr", {500.f, 0.f, 0.f});
+    scene.add_physical_sensor(pf.box_arrival_port, 300, 300, 250);
+    pf.box_arrival_virt  = scene.add_virtual_sensor(pf.box_arrival_port);
+
+    pf.box_proto    = scene.add_prototype(250, 250, 200, 0u);
+    pf.pallet_proto = scene.add_prototype(1200, 800, 145, 0u);
+
+    pf.picker = scene.add_picker(factory::Vec3{-1000.f, 0.f, 1500.f}, 1000.f);
+
+    pf.station_e = reg.create();
+    auto& sc = reg.emplace<factory::StationComponent>(pf.station_e);
+    sc.set_arrival_port(pf.box_arrival_port);
+    sc.set_arrival_virtual_sensor(pf.box_arrival_virt);
+    sc.add_picker(pf.picker);
+
+    auto& palc = reg.emplace<factory::PalletizeComponent>(pf.station_e);
+    palc.set_pallet_arrival_port(pf.pallet_arrival_port);
+    palc.set_pallet_tap_virtual_sensor(pf.pallet_tap_virt);
+    palc.set_pattern(std::make_shared<factory::GridPattern>());
+    palc.set_pallet_dimensions(1200, 800, 145, 1500);
+
+    return pf;
+}
+
+// Place an item at a port's world position. Returns the item entity.
+static entt::entity place_item_at_port(factory::FactoryScene& scene,
+                                       entt::entity port,
+                                       entt::entity proto)
+{
+    auto& reg = scene.registry();
+    auto e    = reg.create();
+    auto& p   = reg.emplace<factory::PoseComponent>(e);
+    auto pw   = factory::world_transform(port, reg);
+    p.position = factory::Vec3(pw[3]);
+    p.parent   = scene.root_entity();
+    reg.emplace<factory::SpawnedItemComponent>(e).set_prototype(proto);
+    return e;
+}
+
+TEST(station_claims_pallet_at_arrival_port) {
+    auto pf = make_palletizer_fixture();
+    auto& reg = pf.scene.registry();
+    auto pallet = place_item_at_port(pf.scene, pf.pallet_arrival_port, pf.pallet_proto);
+
+    factory::sensor::scan(pf.scene);
+    factory::station::step(pf.scene, 0.016f);
+
+    auto& palc = reg.get<factory::PalletizeComponent>(pf.station_e);
+    REQUIRE(palc.current_pallet() == pallet);
+    REQUIRE(reg.any_of<factory::PalletComponent>(pallet));
+    // The station should also have written the pallet-tap virtual sensor.
+    REQUIRE(reg.get<factory::SensorComponent>(pf.pallet_tap_virt).blocked());
+}
+
+TEST(station_skips_already_claimed_pallet) {
+    // A pallet that already has a PalletComponent (i.e. previously claimed
+    // and released) must NOT be re-claimed when it loiters in the detect
+    // sensor's volume on its way out.
+    auto pf = make_palletizer_fixture();
+    auto& reg = pf.scene.registry();
+    auto pallet = place_item_at_port(pf.scene, pf.pallet_arrival_port, pf.pallet_proto);
+    reg.emplace<factory::PalletComponent>(pallet);   // mark as already-seen
+
+    factory::sensor::scan(pf.scene);
+    factory::station::step(pf.scene, 0.016f);
+
+    auto& palc = reg.get<factory::PalletizeComponent>(pf.station_e);
+    REQUIRE(palc.current_pallet() == entt::null);
+    REQUIRE(!reg.get<factory::SensorComponent>(pf.pallet_tap_virt).blocked());
+}
+
+TEST(station_dispatches_idle_picker_when_box_arrives) {
+    auto pf = make_palletizer_fixture();
+    auto& reg = pf.scene.registry();
+
+    // Pre-claim a pallet to skip the acquisition path.
+    auto pallet = place_item_at_port(pf.scene, pf.pallet_arrival_port, pf.pallet_proto);
+    auto& palc = reg.get<factory::PalletizeComponent>(pf.station_e);
+    palc.set_current_pallet(pallet);
+    auto& palletc = reg.emplace<factory::PalletComponent>(pallet);
+    palletc.set_length_mm(1200);
+    palletc.set_width_mm(800);
+    palletc.set_height_mm(145);
+    palletc.set_max_stack_height_mm(1500);
+
+    auto box = place_item_at_port(pf.scene, pf.box_arrival_port, pf.box_proto);
+
+    factory::sensor::scan(pf.scene);
+    factory::station::step(pf.scene, 0.016f);
+
+    const auto& pt = reg.get<factory::PickerTransportComponent>(pf.picker);
+    REQUIRE(pt.state()           == factory::PickerState::MovingToBox);
+    REQUIRE(pt.current_box()     == box);
+    REQUIRE(pt.drop_container()  == pallet);
+}
+
+TEST(station_does_not_dispatch_without_pallet) {
+    auto pf = make_palletizer_fixture();
+    auto& reg = pf.scene.registry();
+
+    place_item_at_port(pf.scene, pf.box_arrival_port, pf.box_proto);
+
+    factory::sensor::scan(pf.scene);
+    factory::station::step(pf.scene, 0.016f);
+
+    const auto& pt = reg.get<factory::PickerTransportComponent>(pf.picker);
+    REQUIRE(pt.state() == factory::PickerState::Idle);
+}
+
+TEST(station_does_not_double_claim_box) {
+    // With two pickers and one box: the first station::step assigns the
+    // box to picker1; the next step must NOT also assign it to picker2.
+    auto pf = make_palletizer_fixture();
+    auto& reg = pf.scene.registry();
+
+    auto pallet = place_item_at_port(pf.scene, pf.pallet_arrival_port, pf.pallet_proto);
+    auto& palc = reg.get<factory::PalletizeComponent>(pf.station_e);
+    palc.set_current_pallet(pallet);
+    auto& palletc = reg.emplace<factory::PalletComponent>(pallet);
+    palletc.set_length_mm(1200);
+    palletc.set_width_mm(800);
+    palletc.set_height_mm(145);
+    palletc.set_max_stack_height_mm(1500);
+
+    auto picker2 = pf.scene.add_picker(factory::Vec3{1000.f, 0.f, 1500.f}, 1000.f);
+    reg.get<factory::StationComponent>(pf.station_e).add_picker(picker2);
+
+    place_item_at_port(pf.scene, pf.box_arrival_port, pf.box_proto);
+
+    factory::sensor::scan(pf.scene);
+    factory::station::step(pf.scene, 0.016f);
+    factory::sensor::scan(pf.scene);
+    factory::station::step(pf.scene, 0.016f);
+
+    const auto& pt2 = reg.get<factory::PickerTransportComponent>(picker2);
+    REQUIRE(pt2.state() == factory::PickerState::Idle);
+}
+
+TEST(station_arrival_virtual_blocked_when_no_pallet) {
+    auto pf = make_palletizer_fixture();
+    auto& reg = pf.scene.registry();
+
+    factory::station::step(pf.scene, 0.016f);
+
+    REQUIRE(reg.get<factory::SensorComponent>(pf.box_arrival_virt).blocked());
+}
+
+TEST(station_arrival_virtual_clear_with_pallet_and_idle_picker) {
+    auto pf = make_palletizer_fixture();
+    auto& reg = pf.scene.registry();
+    auto pallet = place_item_at_port(pf.scene, pf.pallet_arrival_port, pf.pallet_proto);
+    auto& palc = reg.get<factory::PalletizeComponent>(pf.station_e);
+    palc.set_current_pallet(pallet);
+    reg.emplace<factory::PalletComponent>(pallet);
+
+    factory::station::step(pf.scene, 0.016f);
+
+    REQUIRE(!reg.get<factory::SensorComponent>(pf.box_arrival_virt).blocked());
+}
+
+TEST(station_releases_full_pallet_when_all_pickers_idle) {
+    auto pf = make_palletizer_fixture();
+    auto& reg = pf.scene.registry();
+
+    auto pallet = place_item_at_port(pf.scene, pf.pallet_arrival_port, pf.pallet_proto);
+    auto& palc = reg.get<factory::PalletizeComponent>(pf.station_e);
+    palc.set_current_pallet(pallet);
+    auto& palletc = reg.emplace<factory::PalletComponent>(pallet);
+    palletc.set_length_mm(1200);
+    palletc.set_width_mm(800);
+    palletc.set_height_mm(145);
+    palletc.set_max_stack_height_mm(1500);
+
+    // Fill the pallet with 12 boxes so GridPattern::next_pose returns nullopt.
+    for (int i = 0; i < 12; ++i) {
+        auto child = reg.create();
+        reg.emplace<factory::PoseComponent>(child);
+        reg.emplace<factory::SpawnedItemComponent>(child).set_prototype(pf.box_proto);
+        palletc.add_item(child);
+    }
+
+    // Pretend the station already drove the gate sensor.
+    reg.get<factory::SensorComponent>(pf.pallet_tap_virt).set_blocked(true);
+
+    factory::station::step(pf.scene, 0.016f);
+
+    REQUIRE(palc.current_pallet() == entt::null);
+    REQUIRE(!reg.get<factory::SensorComponent>(pf.pallet_tap_virt).blocked());
+}
+
+TEST(station_does_not_release_while_picker_busy) {
+    auto pf = make_palletizer_fixture();
+    auto& reg = pf.scene.registry();
+
+    auto pallet = place_item_at_port(pf.scene, pf.pallet_arrival_port, pf.pallet_proto);
+    auto& palc = reg.get<factory::PalletizeComponent>(pf.station_e);
+    palc.set_current_pallet(pallet);
+    auto& palletc = reg.emplace<factory::PalletComponent>(pallet);
+    palletc.set_length_mm(1200);
+    palletc.set_width_mm(800);
+    palletc.set_height_mm(145);
+    palletc.set_max_stack_height_mm(1500);
+    for (int i = 0; i < 12; ++i) {
+        auto child = reg.create();
+        reg.emplace<factory::PoseComponent>(child);
+        reg.emplace<factory::SpawnedItemComponent>(child).set_prototype(pf.box_proto);
+        palletc.add_item(child);
+    }
+
+    // Picker mid-cycle.
+    auto& pt = reg.get<factory::PickerTransportComponent>(pf.picker);
+    pt.set_state(factory::PickerState::Carrying);
+    reg.get<factory::SensorComponent>(pf.pallet_tap_virt).set_blocked(true);
+
+    factory::station::step(pf.scene, 0.016f);
+
+    REQUIRE(palc.current_pallet() == pallet);
+    REQUIRE(reg.get<factory::SensorComponent>(pf.pallet_tap_virt).blocked());
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 int main() {
     printf("Running sim tests...\n");
@@ -807,6 +1281,31 @@ int main() {
     RUN(no_spawn_when_debt_below_one);
     RUN(source_caps_at_one_spawn_per_tick);
     RUN(sink_despawns_item_at_in_port);
+
+    // multi-item-on-one-belt safety
+    RUN(belt_does_not_double_clamp_at_terminal_exit);
+    RUN(belt_does_not_double_handover);
+
+    // MagicTransportComponent
+    RUN(magic_default_state_idle);
+    RUN(magic_setters_round_trip);
+    RUN(magic_position_lands_on_endpoints);
+    RUN(magic_position_handles_zero_length_leg);
+    RUN(magic_idle_does_not_advance);
+    RUN(magic_completes_leg_and_grabs_box);
+    RUN(magic_drop_releases_box_to_container);
+    RUN(magic_returns_to_idle_at_home);
+
+    // station::step
+    RUN(station_claims_pallet_at_arrival_port);
+    RUN(station_skips_already_claimed_pallet);
+    RUN(station_dispatches_idle_picker_when_box_arrives);
+    RUN(station_does_not_dispatch_without_pallet);
+    RUN(station_does_not_double_claim_box);
+    RUN(station_arrival_virtual_blocked_when_no_pallet);
+    RUN(station_arrival_virtual_clear_with_pallet_and_idle_picker);
+    RUN(station_releases_full_pallet_when_all_pickers_idle);
+    RUN(station_does_not_release_while_picker_busy);
 
     printf("\n%d/%d passed", g_run - g_fail, g_run);
     if (g_fail) printf("  (%d FAILED)", g_fail);

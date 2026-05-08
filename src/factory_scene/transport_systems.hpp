@@ -1,6 +1,9 @@
 #pragma once
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <tuple>
+#include <unordered_set>
 #include <vector>
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
@@ -92,13 +95,24 @@ inline void step(FactoryScene& scene, float dt) {
     auto& reg = scene.registry();
 
     // ── Belt motion ──────────────────────────────────────────────────────────
+    //
+    // Two-pass: first collect every item-on-belt with its start-of-tick
+    // position-along-belt `t`, sort by belt then by descending `t`. Process
+    // in that order so the leading item on each belt claims the exit before
+    // any trailing item can leapfrog into it. Once any item on a belt
+    // handovers / clamps to its exit this tick, the belt is "frozen" for the
+    // rest of the tick and other items behind the leader stay in place; the
+    // sensor pass on the next tick will see the leader occupying the exit
+    // and freeze the belt cleanly.
 
-    struct Handover {
-        entt::entity item;
-        entt::entity next_belt;
-        Vec3         land_pos;
+    struct PendingItem {
+        entt::entity                 item;
+        entt::entity                 belt;
+        const ConveyorBeltComponent* bc;
+        Vec3                         entry_world;
+        float                        t_start;
     };
-    std::vector<Handover> handovers;
+    std::vector<PendingItem> pending;
 
     for (auto&& [item_e, it, ipose] :
          reg.view<ItemOnTransportComponent, PoseComponent>().each())
@@ -109,31 +123,61 @@ inline void step(FactoryScene& scene, float dt) {
 
         if (!belt_is_moving(reg, belt_e)) continue;
 
-        ipose.position += bc->dir() * bc->belt_speed_mm_s() * dt;
-
         Vec3  entry_world = world_position(bc->entry_port(), reg);
-        float t           = glm::dot(ipose.position - entry_world, bc->dir());
+        float t_start     = glm::dot(ipose.position - entry_world, bc->dir());
+        pending.push_back({item_e, belt_e, bc, entry_world, t_start});
+    }
 
-        if (t < static_cast<float>(bc->length_mm())) continue;
+    std::sort(pending.begin(), pending.end(),
+              [](const PendingItem& a, const PendingItem& b) {
+                  if (a.belt != b.belt)
+                      return static_cast<std::uint32_t>(a.belt)
+                           < static_cast<std::uint32_t>(b.belt);
+                  return a.t_start > b.t_start;
+              });
 
-        const auto* exit_pc = reg.try_get<PortComponent>(bc->exit_port());
-        if (!exit_pc) continue;
+    struct Handover {
+        entt::entity item;
+        entt::entity next_belt;
+        Vec3         land_pos;
+    };
+    std::vector<Handover>            handovers;
+    std::unordered_set<entt::entity> frozen_belts;
+
+    for (const auto& p : pending) {
+        if (frozen_belts.count(p.belt)) continue;
+
+        auto& ipose = reg.get<PoseComponent>(p.item);
+        ipose.position += p.bc->dir() * p.bc->belt_speed_mm_s() * dt;
+
+        const float t = glm::dot(ipose.position - p.entry_world, p.bc->dir());
+        if (t < static_cast<float>(p.bc->length_mm())) continue;
+
+        const auto* exit_pc = reg.try_get<PortComponent>(p.bc->exit_port());
+        if (!exit_pc) {
+            frozen_belts.insert(p.belt);
+            continue;
+        }
 
         if (exit_pc->transport() != entt::null) {
             // Belt-to-belt handover (gated by destination port = exit_port).
-            if (!port_is_clear(reg, bc->exit_port())) continue;
-
-            auto next_e = exit_pc->transport();
+            if (!port_is_clear(reg, p.bc->exit_port())) {
+                frozen_belts.insert(p.belt);
+                continue;
+            }
+            auto        next_e  = exit_pc->transport();
             const auto* next_bc = reg.try_get<ConveyorBeltComponent>(next_e);
-            if (!next_bc) continue;
-
+            if (!next_bc) {
+                frozen_belts.insert(p.belt);
+                continue;
+            }
             Vec3 next_entry_world = world_position(next_bc->entry_port(), reg);
-            handovers.push_back({item_e, next_e, next_entry_world});
+            handovers.push_back({p.item, next_e, next_entry_world});
         } else {
-            // Terminal exit — clamp to exit position; sinks (in lifecycle)
-            // and stations (via sensor poll) decide what happens next.
-            ipose.position = world_position(bc->exit_port(), reg);
+            // Terminal exit — clamp to exit position.
+            ipose.position = world_position(p.bc->exit_port(), reg);
         }
+        frozen_belts.insert(p.belt);
     }
 
     for (auto& h : handovers) {

@@ -30,6 +30,51 @@ inline entt::entity find_item_at_port(const entt::registry& reg, entt::entity po
     return entt::null;
 }
 
+// ── Picker-OR-magic agent helpers ──────────────────────────────────────────
+// Both agent flavours share the same state enum and the same conceptual
+// dispatch contract. These helpers let the dispatcher remain ignorant of
+// which one it's talking to.
+
+inline PickerState agent_state(const entt::registry& reg, entt::entity e) {
+    if (const auto* pt = reg.try_get<PickerTransportComponent>(e)) return pt->state();
+    if (const auto* mt = reg.try_get<MagicTransportComponent>(e))  return mt->state();
+    return PickerState::Idle;
+}
+
+inline entt::entity agent_current_box(const entt::registry& reg, entt::entity e) {
+    if (const auto* pt = reg.try_get<PickerTransportComponent>(e)) return pt->current_box();
+    if (const auto* mt = reg.try_get<MagicTransportComponent>(e))  return mt->current_box();
+    return entt::null;
+}
+
+inline void agent_dispatch(entt::registry& reg, entt::entity agent_e,
+                           Vec3 pickup_target, Vec3 drop_target,
+                           entt::entity drop_container, Quat drop_orientation,
+                           entt::entity box)
+{
+    if (auto* pt = reg.try_get<PickerTransportComponent>(agent_e)) {
+        pt->set_pickup_target(pickup_target);
+        pt->set_drop_target(drop_target);
+        pt->set_drop_container(drop_container);
+        pt->set_drop_orientation(drop_orientation);
+        pt->set_current_box(box);
+        pt->set_state(PickerState::MovingToBox);
+        return;
+    }
+    if (auto* mt = reg.try_get<MagicTransportComponent>(agent_e)) {
+        mt->set_pickup_target(pickup_target);
+        mt->set_drop_target(drop_target);
+        mt->set_drop_container(drop_container);
+        mt->set_drop_orientation(drop_orientation);
+        mt->set_current_box(box);
+        // Snapshot the agent's current world position as the start of this leg.
+        const auto& mpose = reg.get<PoseComponent>(agent_e);
+        mt->set_leg_origin(mpose.position);
+        mt->set_elapsed_s(0.f);
+        mt->set_state(PickerState::MovingToBox);
+    }
+}
+
 }  // namespace detail
 
 // Pure dispatch — runs after sensors and transports have refreshed.
@@ -61,24 +106,22 @@ inline void step(FactoryScene& scene, float /*dt*/) {
 
         const bool has_pallet = !pc || pc->current_pallet() != entt::null;
 
-        // ── Find an idle picker ────────────────────────────────────────────
-        entt::entity idle_picker = entt::null;
+        // ── Find an idle agent (picker or magic) ───────────────────────────
+        entt::entity idle_agent = entt::null;
         for (auto p : sc.pickers()) {
-            auto* pt = reg.try_get<PickerTransportComponent>(p);
-            if (pt && pt->state() == PickerState::Idle) {
-                idle_picker = p;
+            if (detail::agent_state(reg, p) == PickerState::Idle) {
+                idle_agent = p;
                 break;
             }
         }
 
         // ── Box dispatch ────────────────────────────────────────────────────
-        if (has_pallet && idle_picker != entt::null && pc) {
+        if (has_pallet && idle_agent != entt::null && pc) {
             auto box_item = detail::find_item_at_port(reg, sc.arrival_port());
             if (box_item != entt::null) {
                 bool already_claimed = false;
                 for (auto p : sc.pickers()) {
-                    auto* pt = reg.try_get<PickerTransportComponent>(p);
-                    if (pt && pt->current_box() == box_item) {
+                    if (detail::agent_current_box(reg, p) == box_item) {
                         already_claimed = true;
                         break;
                     }
@@ -95,13 +138,12 @@ inline void step(FactoryScene& scene, float /*dt*/) {
                                 glm::vec4 drop_world    = pallet_world * glm::vec4(slot->position, 1.f);
                                 glm::mat4 box_w         = world_transform(box_item, reg);
 
-                                auto& picker = reg.get<PickerTransportComponent>(idle_picker);
-                                picker.set_pickup_target(Vec3(box_w[3]));
-                                picker.set_drop_target(Vec3(drop_world));
-                                picker.set_drop_container(pc->current_pallet());
-                                picker.set_drop_orientation(slot->orientation);
-                                picker.set_current_box(box_item);
-                                picker.set_state(PickerState::MovingToBox);
+                                detail::agent_dispatch(reg, idle_agent,
+                                                       Vec3(box_w[3]),
+                                                       Vec3(drop_world),
+                                                       pc->current_pallet(),
+                                                       slot->orientation,
+                                                       box_item);
                             }
                         }
                     }
@@ -116,8 +158,7 @@ inline void step(FactoryScene& scene, float /*dt*/) {
             if (!blocked) {
                 bool any_idle = false;
                 for (auto p : sc.pickers()) {
-                    auto* pt = reg.try_get<PickerTransportComponent>(p);
-                    if (pt && pt->state() == PickerState::Idle) {
+                    if (detail::agent_state(reg, p) == PickerState::Idle) {
                         any_idle = true;
                         break;
                     }
@@ -127,12 +168,11 @@ inline void step(FactoryScene& scene, float /*dt*/) {
             reg.get<SensorComponent>(sc.arrival_virtual_sensor()).set_blocked(blocked);
         }
 
-        // ── Pallet release (full + pickers idle) ───────────────────────────
+        // ── Pallet release (full + agents idle) ────────────────────────────
         if (pc && pc->current_pallet() != entt::null) {
             bool all_idle = true;
             for (auto p : sc.pickers()) {
-                auto* pt = reg.try_get<PickerTransportComponent>(p);
-                if (pt && pt->state() != PickerState::Idle) {
+                if (detail::agent_state(reg, p) != PickerState::Idle) {
                     all_idle = false;
                     break;
                 }

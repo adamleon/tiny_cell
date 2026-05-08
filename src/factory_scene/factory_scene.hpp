@@ -263,6 +263,22 @@ public:
         return e;
     }
 
+    // Whimsical placeholder for transports we haven't fully designed yet.
+    // Same dispatch contract as add_picker — the station treats both the
+    // same way; only the visible motion differs.
+    entt::entity add_magic_transport(Vec3 home_pose, float leg_duration_s = 1.5f) {
+        auto e = registry_.create();
+        registry_.emplace<TransportComponent>(e);
+        auto& mt = registry_.emplace<MagicTransportComponent>(e);
+        mt.set_home_pose(home_pose);
+        mt.set_leg_duration_s(leg_duration_s);
+        mt.set_leg_origin(home_pose);
+        auto& pose = registry_.emplace<PoseComponent>(e);
+        pose.position = home_pose;
+        pose.parent   = root_entity();
+        return e;
+    }
+
     // Add a port at distance `position_mm` along the belt's direction from
     // the entry port. The new port is parented to the belt's entry port so
     // its world transform follows the belt's orientation automatically.

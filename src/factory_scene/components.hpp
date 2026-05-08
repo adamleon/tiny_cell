@@ -187,6 +187,49 @@ private:
     entt::entity current_box_      = entt::null;
 };
 
+// Whimsical placeholder transport. Same conceptual job as a picker — claim an
+// item at a pickup point, carry it to a drop target, parent it into a
+// container, return to home — but the motion is non-physical: parabolic arc
+// + horizontal swirl + tumbling rotation per leg. Use it as a stand-in for
+// any transport flavour we haven't fully designed yet (cross-belt sorter,
+// reach-constrained robot arm, AGV, lift, …). The state machine and the
+// transitions on reach are identical to the picker; only the path differs.
+struct MagicTransportComponent {
+    Vec3         home_pose()        const { return home_pose_; }
+    Vec3         pickup_target()    const { return pickup_target_; }
+    Vec3         drop_target()      const { return drop_target_; }
+    entt::entity drop_container()   const { return drop_container_; }
+    Quat         drop_orientation() const { return drop_orientation_; }
+    float        leg_duration_s()   const { return leg_duration_s_; }
+    float        elapsed_s()        const { return elapsed_s_; }
+    Vec3         leg_origin()       const { return leg_origin_; }
+    PickerState  state()            const { return state_; }
+    entt::entity current_box()      const { return current_box_; }
+
+    void set_home_pose(Vec3 v)              { home_pose_       = v; }
+    void set_pickup_target(Vec3 v)          { pickup_target_   = v; }
+    void set_drop_target(Vec3 v)            { drop_target_     = v; }
+    void set_drop_container(entt::entity e) { drop_container_  = e; }
+    void set_drop_orientation(Quat q)       { drop_orientation_= q; }
+    void set_leg_duration_s(float v)        { leg_duration_s_  = detail::finite_non_neg(v); }
+    void set_elapsed_s(float v)             { elapsed_s_       = detail::finite_non_neg(v); }
+    void set_leg_origin(Vec3 v)             { leg_origin_      = v; }
+    void set_state(PickerState s)           { state_           = s; }
+    void set_current_box(entt::entity e)    { current_box_     = e; }
+
+private:
+    Vec3         home_pose_        = Vec3{0.f};
+    Vec3         pickup_target_    = Vec3{0.f};
+    Vec3         drop_target_      = Vec3{0.f};
+    entt::entity drop_container_   = entt::null;
+    Quat         drop_orientation_ = Quat{1.f, 0.f, 0.f, 0.f};
+    float        leg_duration_s_   = 1.5f;     // seconds per state leg
+    float        elapsed_s_        = 0.f;      // time since current state began
+    Vec3         leg_origin_       = Vec3{0.f};// pose at start of current leg
+    PickerState  state_            = PickerState::Idle;
+    entt::entity current_box_      = entt::null;
+};
+
 // ── Ports ─────────────────────────────────────────────────────────────────────
 
 struct PortComponent {

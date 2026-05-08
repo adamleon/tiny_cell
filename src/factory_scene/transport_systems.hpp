@@ -4,6 +4,7 @@
 #include <vector>
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include "components.hpp"
 #include "factory_scene.hpp"
 #include "pose_component.hpp"
@@ -14,6 +15,57 @@ inline Vec3 world_position(entt::entity e, const entt::registry& reg) {
     glm::mat4 m = world_transform(e, reg);
     return Vec3(m[3]);
 }
+
+namespace magic {
+
+// Whimsical position interpolation: linear baseline + parabolic vertical
+// arc + horizontal swirl whose envelope peaks mid-leg. Designed to look
+// non-physical without being chaotic.
+inline Vec3 position(Vec3 origin, Vec3 target, float t) {
+    constexpr float kPi = 3.14159265358979323846f;
+    if (t < 0.f) t = 0.f;
+    if (t > 1.f) t = 1.f;
+
+    Vec3        base   = origin + (target - origin) * t;
+    const Vec3  d      = target - origin;
+    const float length = glm::length(d);
+    if (length < 1e-3f) return base;
+
+    const Vec3  dir    = d / length;
+    const Vec3  up     = Vec3{0.f, 0.f, 1.f};
+    Vec3        right  = glm::cross(dir, up);
+    if (glm::length(right) < 1e-3f) right = Vec3{1.f, 0.f, 0.f};
+    else                            right = glm::normalize(right);
+
+    // Horizontal swirl: 3 full oscillations across the leg, amplitude
+    // peaking at the midpoint and tapering to 0 at both ends so we land
+    // cleanly on the target.
+    const float swirl_envelope = std::sin(t * kPi);
+    const float swirl_phase    = std::sin(t * 6.f * kPi);
+    const float swirl_amp      = std::min(length * 0.3f, 800.f);
+    base += right * (swirl_phase * swirl_amp * swirl_envelope);
+
+    // Parabolic vertical arc — peaks at t=0.5.
+    const float arc_envelope = 4.f * t * (1.f - t);
+    const float arc_amp      = std::min(length * 0.25f, 600.f);
+    base += up * (arc_envelope * arc_amp);
+
+    return base;
+}
+
+// Tumbling rotation: three independent rates around three axes, plus a
+// per-entity seed so different magics don't lock-step.
+inline Quat rotation(float t, float seed) {
+    constexpr float kPi = 3.14159265358979323846f;
+    const float yaw   = t * 4.f * kPi + seed;
+    const float pitch = t * 6.f * kPi + seed * 1.3f;
+    const float roll  = t * 8.f * kPi + seed * 0.7f;
+    return glm::angleAxis(yaw,   Vec3{0.f, 0.f, 1.f})
+         * glm::angleAxis(pitch, Vec3{0.f, 1.f, 0.f})
+         * glm::angleAxis(roll,  Vec3{1.f, 0.f, 0.f});
+}
+
+}  // namespace magic
 
 // A belt is "moving" iff its controller is on AND every gate port is clear.
 inline bool belt_is_moving(const entt::registry& reg, entt::entity belt_e) {
@@ -158,6 +210,90 @@ inline void step(FactoryScene& scene, float dt) {
             case PickerState::Returning: {
                 pt.set_state(PickerState::Idle);
                 pt.set_current_box(entt::null);
+                break;
+            }
+            default: break;
+        }
+    }
+
+    // ── Magic transport motion (whimsical placeholder) ──────────────────────
+
+    for (auto&& [magic_e, mt, mpose] :
+         reg.view<MagicTransportComponent, PoseComponent>().each())
+    {
+        if (mt.state() == PickerState::Idle) continue;
+
+        Vec3 target;
+        switch (mt.state()) {
+            case PickerState::MovingToBox: target = mt.pickup_target(); break;
+            case PickerState::Carrying:    target = mt.drop_target();   break;
+            case PickerState::Returning:   target = mt.home_pose();     break;
+            default: continue;
+        }
+
+        mt.set_elapsed_s(mt.elapsed_s() + dt);
+        const float duration = mt.leg_duration_s() > 0.f ? mt.leg_duration_s() : 1.f;
+        const float phase    = mt.elapsed_s() / duration;
+        const float seed     = static_cast<float>(static_cast<uint32_t>(magic_e) & 0xffu) * 0.1f;
+
+        if (phase < 1.f) {
+            mpose.position    = magic::position(mt.leg_origin(), target, phase);
+            mpose.orientation = magic::rotation(phase, seed);
+            continue;
+        }
+
+        // Reached the end of this leg — clamp to target, settle orientation,
+        // run the same transport / parent reassignment side-effects the
+        // picker uses.
+        mpose.position    = target;
+        mpose.orientation = Quat{1.f, 0.f, 0.f, 0.f};
+
+        switch (mt.state()) {
+            case PickerState::MovingToBox: {
+                auto box = mt.current_box();
+                if (box != entt::null) {
+                    reg.get_or_emplace<ItemOnTransportComponent>(box)
+                       .set_transport(magic_e);
+                    auto& bpose = reg.get<PoseComponent>(box);
+                    bpose.position = Vec3{0.f};
+                    bpose.parent   = magic_e;
+                }
+                mt.set_state(PickerState::Carrying);
+                mt.set_leg_origin(target);
+                mt.set_elapsed_s(0.f);
+                break;
+            }
+            case PickerState::Carrying: {
+                auto box       = mt.current_box();
+                auto container = mt.drop_container();
+                if (box != entt::null) {
+                    if (reg.any_of<ItemOnTransportComponent>(box))
+                        reg.remove<ItemOnTransportComponent>(box);
+
+                    auto& bpose = reg.get<PoseComponent>(box);
+                    if (container != entt::null) {
+                        glm::mat4 cw    = world_transform(container, reg);
+                        glm::mat4 ci    = glm::inverse(cw);
+                        Vec3      local = Vec3(ci * glm::vec4(mt.drop_target(), 1.f));
+                        bpose.position    = local;
+                        bpose.orientation = mt.drop_orientation();
+                        bpose.parent      = container;
+                        if (auto* palletc = reg.try_get<PalletComponent>(container))
+                            palletc->add_item(box);
+                    } else {
+                        bpose.parent = scene.root_entity();
+                    }
+                }
+                mt.set_state(PickerState::Returning);
+                mt.set_leg_origin(target);
+                mt.set_elapsed_s(0.f);
+                break;
+            }
+            case PickerState::Returning: {
+                mt.set_state(PickerState::Idle);
+                mt.set_current_box(entt::null);
+                mt.set_leg_origin(mt.home_pose());
+                mt.set_elapsed_s(0.f);
                 break;
             }
             default: break;

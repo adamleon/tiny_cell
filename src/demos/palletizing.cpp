@@ -1,4 +1,6 @@
+#include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <unordered_map>
 #include <vector>
 
@@ -6,10 +8,14 @@
 #include <threepp/core/Clock.hpp>
 #include <threepp/geometries/BoxGeometry.hpp>
 #include <threepp/geometries/PlaneGeometry.hpp>
+#include <threepp/geometries/SphereGeometry.hpp>
 #include <threepp/lights/AmbientLight.hpp>
 #include <threepp/lights/DirectionalLight.hpp>
+#include <threepp/materials/MeshBasicMaterial.hpp>
 #include <threepp/materials/MeshStandardMaterial.hpp>
 #include <threepp/objects/Mesh.hpp>
+
+#include <glm/gtc/quaternion.hpp>
 
 #include "common/scene_setup.hpp"
 #include "cell/fence_catalog.hpp"
@@ -54,14 +60,27 @@ int main() {
     ss.controls->maxPolarAngle = math::PI / 2.0f - 0.04f;
     ss.controls->update();
 
-    ss.renderer.shadowMap().enabled = false;
+    // GLRenderer is fast enough to afford soft shadow maps; the WGPU path
+    // had to skip them.
+    ss.renderer.shadowMap().enabled = true;
+    ss.renderer.shadowMap().type    = ShadowMap::PFCSoft;
 
     {
         auto sun = DirectionalLight::create(Color(0xffc87a), 2.0f);
         sun->position.set(-4.f, 8.f, 5.f);
+        sun->castShadow = true;
+        sun->shadow->mapSize.set(2048, 2048);
+        sun->shadow->bias = -0.0005f;
+        auto* shadowCam   = sun->shadow->camera->as<OrthographicCamera>();
+        shadowCam->left   = -8.f;
+        shadowCam->right  =  8.f;
+        shadowCam->top    =  8.f;
+        shadowCam->bottom = -8.f;
+        shadowCam->nearPlane = 0.5f;
+        shadowCam->farPlane  = 25.f;
         ss.scene->add(sun);
     }
-    ss.scene->add(AmbientLight::create(Color(0xfff0e0), 1.1f));
+    ss.scene->add(AmbientLight::create(Color(0xfff0e0), 0.7f));
 
     {
         auto geo  = PlaneGeometry::create(60.f, 60.f);
@@ -72,6 +91,7 @@ int main() {
         auto floor = Mesh::create(geo, mat);
         floor->rotation.x = -math::PI / 2.f;
         floor->position.y = -0.001f;
+        floor->receiveShadow = true;
         ss.scene->add(floor);
     }
 
@@ -79,6 +99,10 @@ int main() {
     OBJLoader loader;
     auto protos   = cell::loadCatalogProtos(loader, assetDir, catalog);
     auto fenceGrp = render::buildScene(scene, protos);
+    fenceGrp->traverseType<Mesh>([](Mesh& m) {
+        m.castShadow    = true;
+        m.receiveShadow = true;
+    });
     ss.scene->add(fenceGrp);
 
     // ── Belt meshes (visual only) ─────────────────────────────────────────────
@@ -88,6 +112,10 @@ int main() {
     // Single 6000 mm pallet belt visual, centred at origin, travelling +y.
     auto [palletObj, palletMat] = belt::buildBeltMesh(800, 6000, 0,
                                                        belt::kGenericCatalog, palletTex);
+    palletObj->traverseType<Mesh>([](Mesh& m) {
+        m.castShadow    = true;
+        m.receiveShadow = true;
+    });
     {
         auto grp = Group::create();
         grp->add(palletObj);
@@ -99,6 +127,10 @@ int main() {
     // Box belt visual, centred at ECS X = -1000 (= threepp X = -1.0), travelling +x.
     auto [boxObj, boxMat] = belt::buildBeltMesh(300, 2800, 800,
                                                  belt::kGenericCatalog, boxTex);
+    boxObj->traverseType<Mesh>([](Mesh& m) {
+        m.castShadow    = true;
+        m.receiveShadow = true;
+    });
     {
         auto grp = Group::create();
         grp->add(boxObj);
@@ -164,15 +196,17 @@ int main() {
     // Sink at the north end of the pallet belt.
     scene.add_sink(pal_exit);
 
-    // Picker (no mesh — boxes ride it visibly via parent chain).
-    auto picker = scene.add_picker(factory::Vec3{-1000.f, 0.f, 1500.f}, 1200.f);
+    // Magic placeholder transport — same dispatch contract as a picker but
+    // with whimsical motion. Boxes ride it (via parent chain) through a
+    // swirling, tumbling arc and fall into place on the pallet.
+    auto agent = scene.add_magic_transport(factory::Vec3{-1000.f, 0.f, 1500.f}, 1.5f);
 
     // Station entity.
     auto station_e = reg.create();
     auto& sc = reg.emplace<factory::StationComponent>(station_e);
     sc.set_arrival_port(box_exit);
     sc.set_arrival_virtual_sensor(box_exit_virt);
-    sc.add_picker(picker);
+    sc.add_picker(agent);
 
     auto& palc = reg.emplace<factory::PalletizeComponent>(station_e);
     palc.set_pallet_arrival_port(pal_tap_detect);    // station polls the detection port
@@ -183,6 +217,44 @@ int main() {
     // ── Animate ───────────────────────────────────────────────────────────────
     Clock clock;
     std::unordered_map<entt::entity, std::shared_ptr<threepp::Object3D>> item_meshes;
+
+    // Magic-particle effects: tiny glowing spheres that fade out, spawned at
+    // the magic transport's world position whenever it's actively carrying.
+    struct Particle {
+        std::shared_ptr<threepp::Mesh>                  mesh;
+        std::shared_ptr<threepp::MeshBasicMaterial>     mat;
+        threepp::Vector3                                velocity;
+        float                                           lifetime_s;
+        float                                           total_life_s;
+    };
+    std::vector<Particle> particles;
+
+    auto spawn_magic_particles = [&](factory::Vec3 ecs_world, int count) {
+        static const uint32_t kPalette[] = { 0xff66cc, 0x66ccff, 0xffcc66, 0xcc99ff, 0xffff99 };
+        for (int i = 0; i < count; ++i) {
+            auto geo = threepp::SphereGeometry::create(0.04f, 6, 4);
+            auto mat = threepp::MeshBasicMaterial::create();
+            mat->color       = threepp::Color(kPalette[std::rand() % 5]);
+            mat->transparent = true;
+            mat->opacity     = 1.0f;
+
+            auto mesh = threepp::Mesh::create(geo, mat);
+            // ECS(x, y, z) → threepp(x, z, y) in metres.
+            const float wx = ecs_world.x * 0.001f;
+            const float wy = ecs_world.z * 0.001f;
+            const float wz = ecs_world.y * 0.001f;
+            const float jx = (std::rand() / float(RAND_MAX) - 0.5f) * 0.18f;
+            const float jy = (std::rand() / float(RAND_MAX) - 0.5f) * 0.18f;
+            const float jz = (std::rand() / float(RAND_MAX) - 0.5f) * 0.18f;
+            mesh->position.set(wx + jx, wy + jy, wz + jz);
+            ss.scene->add(mesh);
+
+            const float vx = (std::rand() / float(RAND_MAX) - 0.5f) * 0.6f;
+            const float vy =  0.3f + (std::rand() / float(RAND_MAX)) * 0.8f;
+            const float vz = (std::rand() / float(RAND_MAX) - 0.5f) * 0.6f;
+            particles.push_back({mesh, mat, threepp::Vector3(vx, vy, vz), 0.9f, 0.9f});
+        }
+    };
 
     ss.canvas.animate([&] {
         float delta = clock.getDelta();
@@ -215,12 +287,14 @@ int main() {
             auto mat       = threepp::MeshStandardMaterial::create();
             mat->color     = threepp::Color(proto->color_hex());
             mat->roughness = 0.6f;
-            auto mesh = threepp::Mesh::create(geo, mat);
+            auto mesh           = threepp::Mesh::create(geo, mat);
+            mesh->castShadow    = true;
+            mesh->receiveShadow = true;
             ss.scene->add(mesh);
             item_meshes[item] = mesh;
         }
 
-        // ── Sync mesh positions from world transforms ─────────────────────
+        // ── Sync mesh positions and rotations from world transforms ───────
         for (auto&& [ent, pose, sp] :
              reg.view<factory::PoseComponent,
                       factory::SpawnedItemComponent>().each())
@@ -230,13 +304,49 @@ int main() {
             auto* proto = reg.try_get<factory::ItemPrototypeComponent>(sp.prototype());
             float hh_mm = proto ? proto->height_mm() * 0.5f : 0.f;
             auto  wmat  = factory::world_transform(ent, reg);
-            glm::vec3 wpos = glm::vec3(wmat[3]);
-            // ECS(x, y, z) → threepp(x, z, y) in metres, with half-height offset on Y
+            glm::vec3 wpos  = glm::vec3(wmat[3]);
+            glm::quat wquat = glm::quat_cast(wmat);
+            // ECS(x, y, z) → threepp(x, z, y) in metres, with half-height offset on Y.
             mit->second->position.set(
                 wpos.x * 0.001f,
                 (wpos.z + hh_mm) * 0.001f,
                 wpos.y * 0.001f);
+            // Same axis swap for the rotation: ECS-z → threepp-y, ECS-y → threepp-z.
+            mit->second->quaternion.set(wquat.x, wquat.z, wquat.y, wquat.w);
         }
+
+        // ── Magic particles ───────────────────────────────────────────────
+        // Spawn a sparkly trail at every active magic transport.
+        for (auto&& [mt_e, mt, mpose] :
+             reg.view<factory::MagicTransportComponent,
+                      factory::PoseComponent>().each())
+        {
+            (void)mpose;
+            if (mt.state() == factory::PickerState::Idle) continue;
+            auto wmat = factory::world_transform(mt_e, reg);
+            spawn_magic_particles(glm::vec3(wmat[3]), 3);
+        }
+        // Update existing particles: drift + fade.
+        for (auto& p : particles) {
+            p.mesh->position.x += p.velocity.x * delta;
+            p.mesh->position.y += p.velocity.y * delta;
+            p.mesh->position.z += p.velocity.z * delta;
+            p.lifetime_s -= delta;
+            const float life_frac = std::max(0.f, p.lifetime_s / p.total_life_s);
+            p.mesh->scale.setScalar(life_frac);
+            p.mat->opacity = life_frac;
+        }
+        // Reap expired particles.
+        particles.erase(
+            std::remove_if(particles.begin(), particles.end(),
+                [&](const Particle& p) {
+                    if (p.lifetime_s <= 0.f) {
+                        ss.scene->remove(*p.mesh);
+                        return true;
+                    }
+                    return false;
+                }),
+            particles.end());
 
         // ── Remove despawned meshes (cascade for pallet children) ─────────
         for (auto e : events.despawned) {

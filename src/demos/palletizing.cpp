@@ -257,7 +257,12 @@ int main() {
     };
 
     ss.canvas.animate([&] {
-        float delta = clock.getDelta();
+        // Clamp dt: a frame drop / window drag / debugger pause produces a
+        // huge raw delta. Without the cap, items would advance hundreds of
+        // mm in one tick and could tunnel straight through sensor volumes,
+        // overshoot exits, or fall behind their parent containers. 50 ms is
+        // 3× one tick at 60 Hz — the sim slows down rather than glitching.
+        float delta = std::min(clock.getDelta(), 0.05f);
 
         // ── Simulation tick ───────────────────────────────────────────────
         factory::sensor::scan(scene);

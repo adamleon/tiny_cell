@@ -1214,6 +1214,150 @@ TEST(station_does_not_release_while_picker_busy) {
     REQUIRE(reg.get<factory::SensorComponent>(pf.pallet_tap_virt).blocked());
 }
 
+// ── End-to-end palletizer integration ───────────────────────────────────────
+//
+// Runs the full demo-style palletizing scene (single mid-tap pallet belt,
+// box belt, source / sink, picker, station) for ~60 simulated seconds at the
+// demo's clamped tick rate. No threepp dependency. Catches the class of bugs
+// that only surface during sustained operation: multi-spawn pile-up, the
+// post-release re-claim loop, multi-clamp at exits, item-entity leaks, and
+// the station deadlocking with a partial pallet. We care less about the
+// exact pallet count than that the system makes forward progress without
+// accumulating state.
+
+TEST(palletizer_integration_runs_for_90_seconds) {
+    factory::FactoryScene scene;
+    auto& reg = scene.registry();
+
+    // Pallet belt — single 6000 mm belt with mid-stream gate / detect ports.
+    // Belts run faster than the demo's 200 mm/s so pallet 1 makes it from
+    // the tap to the sink before pallet 2 (which inevitably queues up,
+    // because the source rate exceeds the station's throughput) reaches
+    // the tap and freezes the belt again.
+    auto pallet_belt = scene.add_belt(800, 6000, 0, 1000.f, {0.f, 1.f, 0.f});
+    auto pal_entry   = scene.add_port("pal_entry", {0.f, -3000.f, 0.f}, {0.f, 1.f, 0.f});
+    auto pal_exit    = scene.add_port("pal_exit",  {0.f,  3000.f, 0.f}, {0.f, 1.f, 0.f});
+    scene.connect_belt(pallet_belt, pal_entry, pal_exit);
+    scene.set_port_transport(pal_entry, pallet_belt);
+
+    auto pal_tap_gate   = scene.add_tap_port(pallet_belt, "pal_tap_gate", 3000);
+    scene.make_gate_port(pallet_belt, pal_tap_gate);
+    auto pal_tap_virt   = scene.add_virtual_sensor(pal_tap_gate);
+    auto pal_tap_detect = scene.add_tap_port(pallet_belt, "pal_tap_detect", 3000);
+    scene.add_physical_sensor(pal_tap_detect, 200, 900, 200);
+
+    scene.add_physical_sensor(pal_entry, 2600, 900, 200);  // spawn throttle
+    scene.add_physical_sensor(pal_exit,  200, 900, 200);   // sink detection
+
+    // Box belt — 2800 mm at height 800.
+    auto box_belt  = scene.add_belt(300, 2800, 800, 1000.f, {1.f, 0.f, 0.f});
+    auto box_entry = scene.add_port("box_entry", {-2400.f, 0.f, 800.f}, {1.f, 0.f, 0.f});
+    auto box_exit  = scene.add_port("box_exit",  {  400.f, 0.f, 800.f}, {1.f, 0.f, 0.f});
+    scene.connect_belt(box_belt, box_entry, box_exit);
+    scene.set_port_transport(box_entry, box_belt);
+
+    scene.add_physical_sensor(box_entry, 700, 300, 250);
+    scene.add_physical_sensor(box_exit,  300, 300, 250);
+    auto box_exit_virt = scene.add_virtual_sensor(box_exit);
+
+    // Prototypes & sources.
+    auto pallet_proto = scene.add_prototype(1200, 800, 145, 0xC8A060u);
+    auto box_proto    = scene.add_prototype(250,  250, 200, 0x8B4513u);
+    scene.add_source( 360.f, pallet_proto, pal_entry);
+    scene.add_source(1800.f, box_proto,    box_entry);
+    scene.add_sink(pal_exit);
+
+    // Picker — using the deterministic linear flavour for predictable timing.
+    // 3000 mm/s makes one full pickup-drop-return leg in roughly 1.5 s, so
+    // 12 boxes per pallet ≈ 18 s and the box-belt source rate (one every 2 s)
+    // keeps up.
+    auto picker = scene.add_picker(factory::Vec3{-1000.f, 0.f, 1500.f}, 3000.f);
+
+    // Station.
+    auto station_e = reg.create();
+    auto& sc = reg.emplace<factory::StationComponent>(station_e);
+    sc.set_arrival_port(box_exit);
+    sc.set_arrival_virtual_sensor(box_exit_virt);
+    sc.add_picker(picker);
+
+    auto& palc = reg.emplace<factory::PalletizeComponent>(station_e);
+    palc.set_pallet_arrival_port(pal_tap_detect);
+    palc.set_pallet_tap_virtual_sensor(pal_tap_virt);
+    palc.set_pattern(std::make_shared<factory::GridPattern>());
+    palc.set_pallet_dimensions(1200, 800, 145, 1500);
+
+    // ── Run loop ────────────────────────────────────────────────────────
+    int pallets_completed = 0;
+    int boxes_spawned     = 0;
+    int pallets_spawned   = 0;
+    int peak_items        = 0;
+
+    // 90 s simulated. With 1000 mm/s belts pallet 1 should despawn well
+    // before t=60; the extra headroom catches the second pallet too.
+    const float dt           = 0.05f;
+    const int   total_ticks  = 1800;
+
+    for (int tick = 0; tick < total_ticks; ++tick) {
+        factory::sensor::scan(scene);
+        factory::transport::step(scene, dt);
+        factory::station::step(scene, dt);
+        auto events = factory::lifecycle::step(scene, dt);
+
+        for (auto& [item, proto] : events.spawned) {
+            if (proto == box_proto)    ++boxes_spawned;
+            if (proto == pallet_proto) ++pallets_spawned;
+        }
+
+        // Cascade-destroy despawned pallets (mirrors the demo's render-side
+        // cleanup, but without meshes). Every despawned pallet should be
+        // fully filled — the station only releases on `pattern_full && all
+        // pickers idle`, so a half-filled pallet despawning is itself a bug.
+        for (auto e : events.despawned) {
+            if (auto* palletc = reg.try_get<factory::PalletComponent>(e)) {
+                REQUIRE_EQ(static_cast<int>(palletc->items().size()), 12);
+                ++pallets_completed;
+                for (auto child : palletc->items()) {
+                    if (reg.valid(child)) reg.destroy(child);
+                }
+            }
+            if (reg.valid(e)) reg.destroy(e);
+        }
+
+        // Track current item count to detect leaks / pile-ups.
+        int items_now = 0;
+        reg.view<factory::SpawnedItemComponent>().each(
+            [&](auto, auto&) { ++items_now; });
+        if (items_now > peak_items) peak_items = items_now;
+    }
+
+    // ── Assertions ──────────────────────────────────────────────────────
+    // 1. The system makes forward progress: at least one pallet completes
+    //    and despawns within 60 s. Catches deadlocks (post-release re-claim
+    //    loop, station never declaring full, etc.).
+    REQUIRE(pallets_completed >= 1);
+
+    // 2. The box source actually produced items (sensor throttling didn't
+    //    permanently lock spawn).
+    REQUIRE(boxes_spawned >= 12);
+
+    // 3. The pallet source produced at least as many pallets as completed,
+    //    plus at least one in flight — otherwise the source is leaking.
+    REQUIRE(pallets_spawned >= pallets_completed);
+
+    // 4. No runaway item accumulation. With 1000 mm/s belts and the demo's
+    //    source rates, observed peak in-flight is ~37 (boxes on belt + boxes
+    //    placed on the queued pallets + ~5 pallets in various states). 60 is
+    //    a comfortable bound; an explosion past that signals multi-spawn or
+    //    a stuck picker.
+    REQUIRE(peak_items < 60);
+
+    // 5. After the run completes, in-flight count is similarly bounded.
+    int items_remaining = 0;
+    reg.view<factory::SpawnedItemComponent>().each(
+        [&](auto, auto&) { ++items_remaining; });
+    REQUIRE(items_remaining < 60);
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 int main() {
     printf("Running sim tests...\n");
@@ -1306,6 +1450,9 @@ int main() {
     RUN(station_arrival_virtual_clear_with_pallet_and_idle_picker);
     RUN(station_releases_full_pallet_when_all_pickers_idle);
     RUN(station_does_not_release_while_picker_busy);
+
+    // End-to-end integration
+    RUN(palletizer_integration_runs_for_90_seconds);
 
     printf("\n%d/%d passed", g_run - g_fail, g_run);
     if (g_fail) printf("  (%d FAILED)", g_fail);

@@ -15,3 +15,9 @@ CMakeUserPresets.json
 # OS
 .DS_Store
 Thumbs.db
+
+# Claude Code local settings (per-machine; not for the repo)
+.claude/
+
+# Transient artifacts
+PROJECT_SUMMARY.md

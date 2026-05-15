@@ -58,6 +58,7 @@ endfunction()
 if(TINYCELL_BUILD_DEMOS)
     add_demo(fence_walls)
     add_demo(palletizing)
+    add_demo(static_palletizing)
 endif()
 
 # ── Generator tool (no threepp, just nlohmann/json) ───────────────────────────
@@ -66,6 +67,13 @@ target_include_directories(GenLookup PRIVATE
     ${threepp_SOURCE_DIR}/src/external/nlohmann
 )
 target_compile_options(GenLookup PRIVATE ${TINYCELL_WARNINGS})
+
+# ── HTN sandbox (throwaway architecture spike, no threepp) ────────────────────
+add_executable(htn_sandbox experiments/htn_sandbox/main.cpp)
+target_include_directories(htn_sandbox PRIVATE
+    ${threepp_SOURCE_DIR}/src/external/nlohmann
+)
+target_compile_options(htn_sandbox PRIVATE ${TINYCELL_WARNINGS})
 
 # ── Unit tests (no threepp; data model + solver only) ────────────────────────
 enable_testing()

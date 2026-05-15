@@ -5,7 +5,9 @@
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
 #include "components.hpp"
+#include "depot_components.hpp"
 #include "factory_scene.hpp"
+#include "placement_pattern.hpp"
 #include "pose_component.hpp"
 #include "sensor_systems.hpp"
 
@@ -43,35 +45,70 @@ inline LifecycleEvents step(FactoryScene& scene, float dt) {
         if (src.spawn_debt() >= 1.f && port_is_clear(reg, src.out_port())) {
             const auto* port = reg.try_get<PortComponent>(src.out_port());
             if (port) {
-                src.consume_spawn();
+                const auto* proto =
+                    reg.try_get<ItemPrototypeComponent>(src.prototype());
+                const auto transport_e = port->transport();
+                const auto* depot      =
+                    reg.try_get<DepotTransportComponent>(transport_e);
 
-                auto  item  = reg.create();
-                auto& ipose = reg.emplace<PoseComponent>(item);
+                glm::vec3 spawn_pos{0.f};
+                bool      have_pos = false;
 
-                // Spawn the item with its leading edge at the port — i.e.
-                // shift its centre back by half the item's extent along the
-                // port's forward direction. This keeps the freshly spawned
-                // item from clipping into the previous one (whose trailing
-                // edge has only just cleared the source's laser).
-                const glm::mat4 pw   = world_transform(src.out_port(), reg);
-                const glm::vec3 ppos = glm::vec3(pw[3]);
-                const glm::vec3 pdir = glm::vec3(pw[0]);
-                float half_along_belt = 0.f;
-                if (const auto* proto =
-                        reg.try_get<ItemPrototypeComponent>(src.prototype()))
-                {
-                    half_along_belt =
-                        std::abs(pdir.x) * proto->length_mm() * 0.5f
-                      + std::abs(pdir.y) * proto->width_mm()  * 0.5f
-                      + std::abs(pdir.z) * proto->height_mm() * 0.5f;
+                if (depot && depot->pattern() && proto) {
+                    // Depot: place at pattern's next free slot in depot-local
+                    // frame, then transform to world. The depot's own world
+                    // pose carries the placement.
+                    int placed = 0;
+                    reg.view<ItemOnTransportComponent>().each(
+                        [&](const ItemOnTransportComponent& it) {
+                            if (it.transport() == transport_e) ++placed;
+                        });
+                    PlacementSurface surface;
+                    surface.length_mm    = depot->length_mm();
+                    surface.width_mm     = depot->width_mm();
+                    surface.height_mm    = depot->height_mm();
+                    surface.placed_count = placed;
+                    const auto slot = depot->pattern()->next_pose(surface, *proto);
+                    if (slot.has_value()) {
+                        const glm::mat4 dw    = world_transform(transport_e, reg);
+                        const glm::vec4 local = glm::vec4(slot->position, 1.f);
+                        spawn_pos = glm::vec3(dw * local);
+                        have_pos  = true;
+                    }
+                } else {
+                    // Belt (or bare transport): spawn with the item's leading
+                    // edge at the port — shift the centre back by half the
+                    // item's extent along the port's forward direction. This
+                    // keeps the freshly spawned item from clipping into the
+                    // previous one (whose trailing edge has only just cleared
+                    // the source's laser).
+                    const glm::mat4 pw   = world_transform(src.out_port(), reg);
+                    const glm::vec3 ppos = glm::vec3(pw[3]);
+                    const glm::vec3 pdir = glm::vec3(pw[0]);
+                    float half_along_belt = 0.f;
+                    if (proto) {
+                        half_along_belt =
+                            std::abs(pdir.x) * proto->length_mm() * 0.5f
+                          + std::abs(pdir.y) * proto->width_mm()  * 0.5f
+                          + std::abs(pdir.z) * proto->height_mm() * 0.5f;
+                    }
+                    spawn_pos = ppos - pdir * half_along_belt;
+                    have_pos  = true;
                 }
-                ipose.position = ppos - pdir * half_along_belt;
-                ipose.parent   = scene.root_entity();
 
-                reg.emplace<ItemOnTransportComponent>(item).set_transport(port->transport());
-                reg.emplace<SpawnedItemComponent>(item).set_prototype(src.prototype());
+                if (have_pos) {
+                    src.consume_spawn();
 
-                events.spawned.push_back({item, src.prototype()});
+                    auto  item  = reg.create();
+                    auto& ipose = reg.emplace<PoseComponent>(item);
+                    ipose.position = spawn_pos;
+                    ipose.parent   = scene.root_entity();
+
+                    reg.emplace<ItemOnTransportComponent>(item).set_transport(transport_e);
+                    reg.emplace<SpawnedItemComponent>(item).set_prototype(src.prototype());
+
+                    events.spawned.push_back({item, src.prototype()});
+                }
             }
         }
     }

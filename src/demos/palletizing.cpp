@@ -1,17 +1,13 @@
 #include <algorithm>
 #include <cmath>
-#include <cstdlib>
 #include <unordered_map>
-#include <vector>
 
 #include <threepp/cameras/OrthographicCamera.hpp>
 #include <threepp/core/Clock.hpp>
 #include <threepp/geometries/BoxGeometry.hpp>
 #include <threepp/geometries/PlaneGeometry.hpp>
-#include <threepp/geometries/SphereGeometry.hpp>
 #include <threepp/lights/AmbientLight.hpp>
 #include <threepp/lights/DirectionalLight.hpp>
-#include <threepp/materials/MeshBasicMaterial.hpp>
 #include <threepp/materials/MeshStandardMaterial.hpp>
 #include <threepp/objects/Mesh.hpp>
 
@@ -150,9 +146,13 @@ int main() {
     auto pallet_sink   = scene.declare_sink();
     auto palletizer    = scene.declare_palletizer_station(pallet_proto, box_proto);
 
-    scene.declare_flow(pallet_source, palletizer);    // pallets in
-    scene.declare_flow(box_source,    palletizer);    // boxes in
-    scene.declare_flow(palletizer,    pallet_sink);   // full pallets out
+    // Demand in items/minute. Source rate_per_hour values above give the
+    // *supply*; these declare the *required throughput* the cell must sustain.
+    // 360 pallets/hr = 6/min; 1800 boxes/hr = 30/min; full pallets out match
+    // pallet-in demand (one in, one out).
+    scene.declare_flow(pallet_source, palletizer,  6.f);  // pallets in
+    scene.declare_flow(box_source,    palletizer, 30.f);  // boxes in
+    scene.declare_flow(palletizer,    pallet_sink, 6.f);  // full pallets out
 
     scene.solve_workflow();
 
@@ -167,47 +167,30 @@ int main() {
             if (bc.surface_height_mm() == 800) box_belt    = e;
         });
 
+    // Realistic cost figures for the four pieces of equipment placed by
+    // solve_workflow. Values are rough market-price approximations; the
+    // future archetype solver will replace these with catalog lookups.
+    //   Pallet belt (6 m roller belt + drive):  €12000, 400 W
+    //   Box belt (2.8 m flat belt + drive):     €5000,  250 W
+    //   Picker (UR5e-class):                    €30000, 400 W
+    //   Palletizer mechanism (claim + stack):   €15000, 150 W
+    reg.get<factory::EquipmentCostComponent>(pallet_belt).set_capex_eur(12000.f);
+    reg.get<factory::EquipmentCostComponent>(pallet_belt).set_power_w(400.f);
+    reg.get<factory::EquipmentCostComponent>(box_belt).set_capex_eur(5000.f);
+    reg.get<factory::EquipmentCostComponent>(box_belt).set_power_w(250.f);
+    reg.view<factory::MagicTransportComponent>().each([&](auto e, const auto&) {
+        reg.get<factory::EquipmentCostComponent>(e).set_capex_eur(30000.f);
+        reg.get<factory::EquipmentCostComponent>(e).set_power_w(400.f);
+    });
+    reg.view<factory::PalletizeComponent>().each([&](auto e, const auto&) {
+        reg.get<factory::EquipmentCostComponent>(e).set_capex_eur(15000.f);
+        reg.get<factory::EquipmentCostComponent>(e).set_power_w(150.f);
+    });
+
     // ── Animate ───────────────────────────────────────────────────────────────
     Clock clock;
     std::unordered_map<entt::entity, std::shared_ptr<threepp::Object3D>> item_meshes;
-
-    // Magic-particle effects: tiny glowing spheres that fade out, spawned at
-    // the magic transport's world position whenever it's actively carrying.
-    struct Particle {
-        std::shared_ptr<threepp::Mesh>                  mesh;
-        std::shared_ptr<threepp::MeshBasicMaterial>     mat;
-        threepp::Vector3                                velocity;
-        float                                           lifetime_s;
-        float                                           total_life_s;
-    };
-    std::vector<Particle> particles;
-
-    auto spawn_magic_particles = [&](factory::Vec3 ecs_world, int count) {
-        static const uint32_t kPalette[] = { 0xff66cc, 0x66ccff, 0xffcc66, 0xcc99ff, 0xffff99 };
-        for (int i = 0; i < count; ++i) {
-            auto geo = threepp::SphereGeometry::create(0.04f, 6, 4);
-            auto mat = threepp::MeshBasicMaterial::create();
-            mat->color       = threepp::Color(kPalette[std::rand() % 5]);
-            mat->transparent = true;
-            mat->opacity     = 1.0f;
-
-            auto mesh = threepp::Mesh::create(geo, mat);
-            // ECS(x, y, z) → threepp(x, z, y) in metres.
-            const float wx = ecs_world.x * 0.001f;
-            const float wy = ecs_world.z * 0.001f;
-            const float wz = ecs_world.y * 0.001f;
-            const float jx = (std::rand() / float(RAND_MAX) - 0.5f) * 0.18f;
-            const float jy = (std::rand() / float(RAND_MAX) - 0.5f) * 0.18f;
-            const float jz = (std::rand() / float(RAND_MAX) - 0.5f) * 0.18f;
-            mesh->position.set(wx + jx, wy + jy, wz + jz);
-            ss.scene->add(mesh);
-
-            const float vx = (std::rand() / float(RAND_MAX) - 0.5f) * 0.6f;
-            const float vy =  0.3f + (std::rand() / float(RAND_MAX)) * 0.8f;
-            const float vz = (std::rand() / float(RAND_MAX) - 0.5f) * 0.6f;
-            particles.push_back({mesh, mat, threepp::Vector3(vx, vy, vz), 0.9f, 0.9f});
-        }
-    };
+    render::magic::ParticleSystem magic_particles;
 
     ss.canvas.animate([&] {
         // Clamp dt: a frame drop / window drag / debugger pause produces a
@@ -273,38 +256,9 @@ int main() {
             mit->second->quaternion.set(wquat.x, wquat.z, wquat.y, wquat.w);
         }
 
-        // ── Magic particles ───────────────────────────────────────────────
-        // Spawn a sparkly trail at every active magic transport.
-        for (auto&& [mt_e, mt, mpose] :
-             reg.view<factory::MagicTransportComponent,
-                      factory::PoseComponent>().each())
-        {
-            (void)mpose;
-            if (mt.state() == factory::PickerState::Idle) continue;
-            auto wmat = factory::world_transform(mt_e, reg);
-            spawn_magic_particles(glm::vec3(wmat[3]), 3);
-        }
-        // Update existing particles: drift + fade.
-        for (auto& p : particles) {
-            p.mesh->position.x += p.velocity.x * delta;
-            p.mesh->position.y += p.velocity.y * delta;
-            p.mesh->position.z += p.velocity.z * delta;
-            p.lifetime_s -= delta;
-            const float life_frac = std::max(0.f, p.lifetime_s / p.total_life_s);
-            p.mesh->scale.setScalar(life_frac);
-            p.mat->opacity = life_frac;
-        }
-        // Reap expired particles.
-        particles.erase(
-            std::remove_if(particles.begin(), particles.end(),
-                [&](const Particle& p) {
-                    if (p.lifetime_s <= 0.f) {
-                        ss.scene->remove(*p.mesh);
-                        return true;
-                    }
-                    return false;
-                }),
-            particles.end());
+        // ── Magic-transport particles ────────────────────────────────────
+        magic_particles.spawn_for_active_transports(reg, *ss.scene, 3);
+        magic_particles.step(*ss.scene, delta);
 
         // ── Remove despawned meshes (cascade for pallet children) ─────────
         for (auto e : events.despawned) {

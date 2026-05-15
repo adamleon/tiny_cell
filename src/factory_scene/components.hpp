@@ -93,6 +93,27 @@ private:
 // what counts as "crossing".
 struct LaserSensorComponent {};
 
+// ── Equipment cost ────────────────────────────────────────────────────────────
+
+// Attached to any physical piece of equipment (belt, picker, station, future
+// exit mechanism, ...). Two fields, both in SI-ish units:
+//   capex_eur — one-time market price of the unit
+//   power_w   — nominal electrical power when active
+// Opex is derived from power_w by the (future) solver using a lifetime model;
+// it is *not* stored here. Zero defaults are placeholders — every equipment
+// entity should have these explicitly set before the solver uses them.
+struct EquipmentCostComponent {
+    float capex_eur() const { return capex_eur_; }
+    float power_w()   const { return power_w_; }
+
+    void set_capex_eur(float v) { capex_eur_ = detail::finite_non_neg(v); }
+    void set_power_w(float v)   { power_w_   = detail::finite_non_neg(v); }
+
+private:
+    float capex_eur_ = 0.f;
+    float power_w_   = 0.f;
+};
+
 // ── Transport / workflow ──────────────────────────────────────────────────────
 
 struct TransportComponent {

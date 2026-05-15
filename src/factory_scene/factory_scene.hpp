@@ -5,7 +5,9 @@
 #include <unordered_map>
 #include <vector>
 #include "components.hpp"
+#include "depot_components.hpp"
 #include "placement_pattern.hpp"
+#include "robot_components.hpp"
 #include "solver/solver.hpp"
 #include "station_components.hpp"
 
@@ -183,6 +185,37 @@ public:
         return e;
     }
 
+    // A depot is a stationary "transport" — items sit at pattern-determined
+    // positions until a picker collects them. The footprint
+    // (length/width/height) defines the PlacementSurface the pattern operates
+    // on; for a single-slot depot, set footprint = item dimensions.
+    //
+    // Returns the depot entity. Use set_port_transport(port, depot) and
+    // add_laser_sensor/add_virtual_sensor on the port to wire source
+    // backpressure as usual.
+    entt::entity add_depot(Vec3 position,
+                           int length_mm, int width_mm, int height_mm,
+                           std::shared_ptr<PlacementPattern> pattern,
+                           Vec3 forward = Vec3{1.f, 0.f, 0.f}) {
+        auto e   = registry_.create();
+        auto& dc = registry_.emplace<DepotTransportComponent>(e);
+        dc.set_length_mm(length_mm);
+        dc.set_width_mm(width_mm);
+        dc.set_height_mm(height_mm);
+        dc.set_forward_axis(forward);
+        dc.set_pattern(std::move(pattern));
+        registry_.emplace<TransportComponent>(e);
+
+        auto& pose = registry_.emplace<PoseComponent>(e);
+        pose.position = position;
+        if (glm::dot(forward, forward) > 0.f) {
+            float yaw = std::atan2(forward.y, forward.x);
+            pose.orientation = glm::angleAxis(yaw, Vec3{0.f, 0.f, 1.f});
+        }
+        pose.parent = root_entity();
+        return e;
+    }
+
     int items_on(entt::entity transport) const {
         int n = 0;
         registry_.view<ItemOnTransportComponent>().each(
@@ -264,6 +297,29 @@ public:
         pt.set_speed_mm_s(speed_mm_s);
         auto& pose = registry_.emplace<PoseComponent>(e);
         pose.position = home_pose;
+        pose.parent   = root_entity();
+        return e;
+    }
+
+    // A robot is a visual archetype: its mesh is loaded from a URDF and its
+    // arm articulates via IK to track another entity's world position.
+    // Sim-side it carries no behavioural component — it's a render thing.
+    //
+    //   base_position : ECS-mm world location of the robot's URDF root
+    //   urdf_path     : path passed to threepp::URDFLoader at first render tick
+    //   tracks        : entity whose world position becomes the IK target;
+    //                   entt::null = static (no IK, joints stay at zero)
+    entt::entity add_robot(Vec3 base_position,
+                           std::string urdf_path,
+                           entt::entity tracks = entt::null) {
+        auto e   = registry_.create();
+        auto& rc = registry_.emplace<RobotComponent>(e);
+        rc.set_base_position(base_position);
+        rc.set_urdf_path(std::move(urdf_path));
+        rc.set_tracks(tracks);
+
+        auto& pose = registry_.emplace<PoseComponent>(e);
+        pose.position = base_position;
         pose.parent   = root_entity();
         return e;
     }
@@ -417,19 +473,29 @@ public:
         return e;
     }
 
-    void declare_flow(entt::entity from, entt::entity to) {
-        flows_.push_back({from, to});
+    // A flow connects a producer (source or station) to a consumer (station or
+    // sink) and states the required throughput. items_per_minute is the *demand*
+    // the workflow must satisfy — distinct from a source's rate_per_hour, which
+    // is the supply available. The (future) solver enforces supply ≥ demand and
+    // sizes equipment so the cycle time keeps up.
+    struct WorkflowFlow {
+        entt::entity from;
+        entt::entity to;
+        float        items_per_minute;
+    };
+
+    void declare_flow(entt::entity from, entt::entity to, float items_per_minute) {
+        assert(std::isfinite(items_per_minute) && items_per_minute >= 0.f);
+        flows_.push_back({from, to, items_per_minute});
     }
+
+    const std::vector<WorkflowFlow>& flows() const { return flows_; }
 
     // Build belts, ports, sensors, picker, and wire everything to the
     // declared sources / sinks / station.
     void solve_workflow();
 
 private:
-    struct WorkflowFlow {
-        entt::entity from;
-        entt::entity to;
-    };
     std::vector<WorkflowFlow> flows_;
 };
 
@@ -508,6 +574,15 @@ inline void FactoryScene::solve_workflow() {
     auto& palc = reg.get<PalletizeComponent>(palletizer);
     palc.set_pallet_arrival_port(pal_tap.detect_port);
     palc.set_pallet_tap_virtual_sensor(pal_tap.virtual_sensor);
+
+    // ── Attach (zero-default) cost components to every piece of equipment.
+    // The future solver reads these to compute total cell capex + opex.
+    // Callers may overwrite via reg.get<EquipmentCostComponent>(e) after
+    // solve_workflow returns.
+    reg.emplace<EquipmentCostComponent>(pallet_belt);
+    reg.emplace<EquipmentCostComponent>(box_belt);
+    reg.emplace<EquipmentCostComponent>(picker);
+    reg.emplace<EquipmentCostComponent>(palletizer);
 }
 
 }  // namespace factory

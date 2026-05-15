@@ -86,6 +86,48 @@
             ]
         },
         {
+            "name": "static_palletizing (MSVC)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build-msvc/static_palletizing.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "cmake build (msvc)"
+        },
+        {
+            "name": "static_palletizing (MinGW)",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build-mingw/static_palletizing.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "cmake build (mingw)",
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ]
+        },
+        {
+            "name": "static_palletizing (Linux/Mac)",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/static_palletizing",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ]
+        },
+        {
             "name": "GenLookup (MSVC)",
             "type": "cppvsdbg",
             "request": "launch",

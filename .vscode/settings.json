@@ -8,5 +8,6 @@
     "C_Cpp.files.exclude": {
         "**/build/_deps/**": true
     },
-    "ros.distro": "humble"
+    "ros.distro": "humble",
+    "ROS2.distro": "humble"
 }

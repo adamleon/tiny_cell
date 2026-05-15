@@ -1,0 +1,25 @@
+{
+  "_comment": "Tunable inputs for the HTN sandbox. Edit, save, re-run the exe. No rebuild required.",
+  "task": {
+    "rate_per_minute":   6.0,
+    "source_distance_m": 1.0
+  },
+  "strategies": {
+    "arm": {
+      "cost_each_eur":       1000.0,
+      "max_rate_per_minute": 10.0,
+      "max_count":           3
+    },
+    "push": {
+      "pusher_cost_eur":     500.0,
+      "max_rate_per_minute": 12.0
+    },
+    "belt": {
+      "base_cost_eur":       100.0,
+      "per_metre_eur":        50.0
+    },
+    "laser": {
+      "cost_eur":             50.0
+    }
+  }
+}

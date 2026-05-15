@@ -132,7 +132,12 @@ inline void step(FactoryScene& scene, float /*dt*/) {
                     if (sp) {
                         auto* proto = reg.try_get<ItemPrototypeComponent>(sp->prototype());
                         if (proto) {
-                            auto slot = pc->pattern()->next_pose(palletc, *proto, reg);
+                            PlacementSurface surface;
+                            surface.length_mm    = palletc.length_mm();
+                            surface.width_mm     = palletc.width_mm();
+                            surface.height_mm    = palletc.height_mm();
+                            surface.placed_count = static_cast<int>(palletc.items().size());
+                            auto slot = pc->pattern()->next_pose(surface, *proto);
                             if (slot.has_value()) {
                                 glm::mat4 pallet_world  = world_transform(pc->current_pallet(), reg);
                                 glm::vec4 drop_world    = pallet_world * glm::vec4(slot->position, 1.f);
@@ -188,8 +193,14 @@ inline void step(FactoryScene& scene, float /*dt*/) {
                 auto* sp    = reg.try_get<SpawnedItemComponent>(first);
                 if (sp) {
                     auto* proto = reg.try_get<ItemPrototypeComponent>(sp->prototype());
-                    if (proto)
-                        full = !pc->pattern()->next_pose(palletc, *proto, reg).has_value();
+                    if (proto) {
+                        PlacementSurface surface;
+                        surface.length_mm    = palletc.length_mm();
+                        surface.width_mm     = palletc.width_mm();
+                        surface.height_mm    = palletc.height_mm();
+                        surface.placed_count = static_cast<int>(palletc.items().size());
+                        full = !pc->pattern()->next_pose(surface, *proto).has_value();
+                    }
                 }
             }
 

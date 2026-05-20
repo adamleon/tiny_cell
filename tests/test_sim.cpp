@@ -29,6 +29,8 @@
 #include "factory_scene/cost_model.hpp"
 #include "factory_scene/cost_options.hpp"
 #include "factory_scene/station_solver_types.hpp"
+#include "factory_scene/station_solver_strategy.hpp"
+#include "factory_scene/station_solver_arms_strategy.hpp"
 
 // ── Test harness ──────────────────────────────────────────────────────────────
 static int g_run = 0, g_fail = 0;
@@ -2358,6 +2360,155 @@ TEST(station_solver_pusher_proposal_emits_sub_task_conditions) {
     REQUIRE(p.annual_cost_lb_eur >= p.annual_cost_eur);
 }
 
+// ── ArmsStrategy (Phase 1 of the station-solver port) ──────────────────────
+//
+// Verifies the new Strategy interface wrapping the existing
+// cost_options::palletizer_options. No new behaviour — just that the
+// adapter produces semantically equivalent results.
+
+static factory::station_solver::Task make_palletize_task(float pallets_per_min) {
+    factory::station_solver::Task t{};
+    t.kind                          = factory::station_solver::TaskKind::Palletize;
+    t.throughput_items_per_minute   = pallets_per_min;
+    t.pallet_length_mm              = 1200;
+    t.pallet_width_mm               = 800;
+    t.pallet_max_stack_mm           = 200;
+    t.box_length_mm                 = 300;
+    t.box_width_mm                  = 200;
+    t.box_height_mm                 = 200;
+    t.box_mass_kg                   = 5.f;
+    return t;
+}
+
+TEST(arms_strategy_can_solve_palletize_only) {
+    factory::station_solver::ArmsStrategy s;
+    REQUIRE(s.can_solve(factory::station_solver::TaskKind::Palletize));
+    REQUIRE(!s.can_solve(factory::station_solver::TaskKind::TransportItem));
+    REQUIRE(!s.can_solve(factory::station_solver::TaskKind::DetectItemPresence));
+    REQUIRE(!s.can_solve(factory::station_solver::TaskKind::GripItem));
+}
+
+TEST(arms_strategy_returns_terminal_proposals_with_equipment) {
+    auto catalog = factory::robot_arm_catalog::load("assets/robots/kuka/catalog.json");
+    factory::cost::ExternalParams ext{0.30f, 2000.f};
+    factory::station_solver::StrategyContext ctx{catalog, ext};
+
+    auto task     = make_palletize_task(0.5f);   // 0.5 pallets/min
+    factory::station_solver::ArmsStrategy s;
+    auto props = s.propose(task, ctx);
+
+    REQUIRE(!props.empty());
+    for (const auto& p : props) {
+        REQUIRE(p.solves == factory::station_solver::TaskKind::Palletize);
+        REQUIRE(!p.equipment.empty());          // arms + frame
+        REQUIRE(p.annual_cost_eur > 0.f);
+        REQUIRE(p.remaining.empty());            // terminal — no sub-tasks
+        REQUIRE(p.strategy_name.find("ArmsStrategy") == 0);
+        // Equipment list always ends with the station_frame.
+        REQUIRE(p.equipment.back().archetype_name == "station_frame");
+    }
+}
+
+TEST(arms_strategy_proposal_count_matches_palletizer_options) {
+    auto catalog = factory::robot_arm_catalog::load("assets/robots/kuka/catalog.json");
+    factory::cost::ExternalParams ext{0.30f, 2000.f};
+    factory::station_solver::StrategyContext sctx{catalog, ext};
+    factory::station_solver::ArmsStrategy s;
+    auto task = make_palletize_task(0.5f);
+
+    auto proposals = s.propose(task, sctx);
+
+    // Build the same PalletizerContext directly and compare counts.
+    factory::cost::PalletizerContext pctx{};
+    pctx.geometry.pallet_length_mm    = task.pallet_length_mm;
+    pctx.geometry.pallet_width_mm     = task.pallet_width_mm;
+    pctx.geometry.pallet_max_stack_mm = task.pallet_max_stack_mm;
+    pctx.geometry.box_length_mm       = task.box_length_mm;
+    pctx.geometry.box_width_mm        = task.box_width_mm;
+    pctx.geometry.box_height_mm       = task.box_height_mm;
+    const float half_l = 0.5f * 1.2f;
+    const float half_w = 0.5f * 0.8f;
+    pctx.per_arm_task.distance_m           = std::sqrt(half_l*half_l + half_w*half_w);
+    pctx.per_arm_task.payload_mass_kg      = task.box_mass_kg;
+    pctx.per_arm_task.vertical_lift_m      = 0.1f;
+    pctx.per_arm_task.gravity_factor       = 0.5f;
+    pctx.per_arm_task.operating_distance_m = 0.f;
+    pctx.station_mech_capex_eur            = 15000.f;
+    pctx.station_mech_power_w              = 150.f;
+    pctx.station_mech_maintenance_annual_eur = 600.f;
+    pctx.station_mech_lifetime_years       = 14.f;
+    pctx.max_pickers                       = 3;
+    auto direct = factory::cost::palletizer_options(0.5f, catalog, pctx, ext);
+
+    REQUIRE_EQ(static_cast<int>(proposals.size()), static_cast<int>(direct.size()));
+    // Cheapest proposal cost == cheapest direct option cost (both sorted).
+    REQUIRE_NEAR(proposals.front().annual_cost_eur,
+                 direct.front().annual_total_cost_eur, 1e-2f);
+}
+
+TEST(arms_strategy_proposal_equipment_count_matches_num_pickers) {
+    auto catalog = factory::robot_arm_catalog::load("assets/robots/kuka/catalog.json");
+    factory::cost::ExternalParams ext{0.30f, 2000.f};
+    factory::station_solver::StrategyContext sctx{catalog, ext};
+    factory::station_solver::ArmsStrategy s;
+    auto task = make_palletize_task(0.5f);
+
+    auto props = s.propose(task, sctx);
+    for (const auto& p : props) {
+        // Equipment list = N arms + 1 station_frame.
+        int arm_count = 0;
+        int frame_count = 0;
+        for (const auto& e : p.equipment) {
+            if (e.archetype_name == "robot_arm")     ++arm_count;
+            else if (e.archetype_name == "station_frame") ++frame_count;
+        }
+        REQUIRE(arm_count >= 1);
+        REQUIRE_EQ(frame_count, 1);
+        // strategy name encodes the N — check the equipment count matches.
+        // ArmsStrategy(N=2, KR10_R900_2) for example.
+        const auto eq_pos = p.strategy_name.find("N=");
+        REQUIRE(eq_pos != std::string::npos);
+        const int n_declared = std::atoi(p.strategy_name.c_str() + eq_pos + 2);
+        REQUIRE_EQ(arm_count, n_declared);
+    }
+}
+
+TEST(arms_strategy_returns_empty_for_zero_demand) {
+    auto catalog = factory::robot_arm_catalog::load("assets/robots/kuka/catalog.json");
+    factory::cost::ExternalParams ext{0.30f, 2000.f};
+    factory::station_solver::StrategyContext sctx{catalog, ext};
+    factory::station_solver::ArmsStrategy s;
+    auto task = make_palletize_task(0.f);
+    auto props = s.propose(task, sctx);
+    REQUIRE(props.empty());
+}
+
+TEST(arms_strategy_config_propagates_to_proposal_costs) {
+    // Doubling the station-frame cost should shift every proposal's total
+    // by the same (annualised) increment.
+    auto catalog = factory::robot_arm_catalog::load("assets/robots/kuka/catalog.json");
+    factory::cost::ExternalParams ext{0.30f, 2000.f};
+    factory::station_solver::StrategyContext sctx{catalog, ext};
+
+    factory::station_solver::ArmsStrategy::Config cheap_cfg{};
+    factory::station_solver::ArmsStrategy::Config dear_cfg = cheap_cfg;
+    dear_cfg.station_mech_capex_eur = 2.f * cheap_cfg.station_mech_capex_eur;
+
+    factory::station_solver::ArmsStrategy s_cheap(cheap_cfg);
+    factory::station_solver::ArmsStrategy s_dear (dear_cfg);
+
+    auto task = make_palletize_task(0.5f);
+    auto p_cheap = s_cheap.propose(task, sctx);
+    auto p_dear  = s_dear .propose(task, sctx);
+
+    REQUIRE_EQ(static_cast<int>(p_cheap.size()), static_cast<int>(p_dear.size()));
+    const float delta_capex_annual =
+        (dear_cfg.station_mech_capex_eur - cheap_cfg.station_mech_capex_eur)
+            / cheap_cfg.station_mech_lifetime_years;
+    REQUIRE_NEAR(p_dear.front().annual_cost_eur - p_cheap.front().annual_cost_eur,
+                 delta_capex_annual, 1e-2f);
+}
+
 TEST(palletizer_integrates_with_picker_throughput) {
     // End-to-end composition: take the picker's analytic throughput and feed
     // it directly into the palletizer model. Confirms the units line up
@@ -2722,6 +2873,14 @@ int main() {
     RUN(station_solver_palletize_task_constructs);
     RUN(station_solver_terminal_arms_proposal_carries_equipment);
     RUN(station_solver_pusher_proposal_emits_sub_task_conditions);
+
+    // Station-solver Phase 1: Strategy interface + ArmsStrategy
+    RUN(arms_strategy_can_solve_palletize_only);
+    RUN(arms_strategy_returns_terminal_proposals_with_equipment);
+    RUN(arms_strategy_proposal_count_matches_palletizer_options);
+    RUN(arms_strategy_proposal_equipment_count_matches_num_pickers);
+    RUN(arms_strategy_returns_empty_for_zero_demand);
+    RUN(arms_strategy_config_propagates_to_proposal_costs);
 
     RUN(palletizer_integrates_with_picker_throughput);
 

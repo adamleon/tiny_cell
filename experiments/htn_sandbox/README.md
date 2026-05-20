@@ -1,107 +1,172 @@
 # HTN sandbox
 
-Throwaway program to make the HTN solver architecture **legible** before we
-build it for real in tiny_cell. Toy domain: 1-D world, three task kinds,
-four strategies. Search algorithm prints every decision to stdout so you can
-follow what it's doing.
+Throwaway program to make the HTN-with-geometry solver architecture
+**legible** before we build it for real in tiny_cell. **Iteration 3**:
+task positions are **solved**, not declared. The outer loop enumerates
+candidate positions for each task; the inner loop runs the strategy
+search for each. The winner is the combination of (task positions,
+strategy choices, equipment placement) with the lowest total cost.
 
 ## Run
 
-After building (see project root CMake):
+After building (`cmake --build build --target htn_sandbox`):
 
 ```
-./build/Debug/htn_sandbox.exe                            # uses default input.json
-./build/Debug/htn_sandbox.exe path/to/other_input.json   # use a different file
+./build/Debug/htn_sandbox.exe                           # default input.json
+./build/Debug/htn_sandbox.exe path/to/other_input.json  # any path
 ```
 
-Edit `input.json`, re-run the exe — no rebuild needed.
+Edit `input.json`, re-run — no rebuild.
 
 ## What's in the toy domain
 
-- **Tasks**: `Palletize`, `Transport`, `DetectPresence`.
+- **Workflow**: source position + sink position on a 1-D line, plus a list
+  of tasks declared **without positions**. The user states *what* needs
+  to happen, not *where*. Tasks are ordered (workflow order = topological
+  order); the first task lands between source and second task, etc.
+- **Task kinds**:
+  - `Palletize`, `Assemble` — root tasks the user declared
+  - `Transport`, `DetectPresence` — sub-tasks emitted by `PushStrategy`
 - **Strategies**:
-  - `ArmStrategy` solves `Palletize` directly (no sub-tasks). Returns one
-    proposal per `N` in 1..`max_count`. Each proposal is terminal.
-  - `PushStrategy` solves `Palletize` with a pusher + emits sub-tasks for
-    `Transport` and `DetectPresence`.
-  - `BeltStrategy` solves `Transport` directly. Cost scales with distance.
-  - `LaserStrategy` solves `DetectPresence` directly.
+  - `ArmStrategy` — solves `Palletize` *or* `Assemble`. Enumerates
+    candidate anchor positions; at each anchor, claims every unclaimed
+    task whose position falls in the work area, provided the summed
+    rate ≤ arm capacity.
+  - `PushStrategy` — solves `Palletize` only. Emits `Transport` +
+    `DetectPresence` as sub-tasks.
+  - `BeltStrategy` — solves `Transport`. Belt length = source→target
+    distance; cost scales with length.
+  - `LaserStrategy` — solves `DetectPresence`. Co-located with the task.
+- **Outer loop**: enumerates task positions on a configurable grid
+  (`outer_grid_step`) with an `outer_edge_margin` from source/sink.
+  Topologically valid only (task `i` strictly upstream of task `i+1`).
+  For each combination, runs the inner search silently and records its
+  cost. After all combinations, picks the cheapest and re-runs the inner
+  search with the full verbose trace for display.
 
-This is enough to exercise:
-- Multiple strategies competing for one task (Arm vs Push for `Palletize`)
-- Sub-task chaining (Push → Transport → Belt, Push → DetectPresence → Laser)
-- Branch-and-bound search (best-first by lower bound, terminate when best
-  complete solution ≤ all open partials' lower bounds)
+## What the output looks like
+
+```
+=== Outer search: 14 task-position combinations ===
+
+Feasible: 14 / 14
+
+Top 5 cheapest:
+  palletize_A=9.0  assemble_B=10.0  → €1000.0
+  palletize_A=9.0  assemble_B=12.0  → €1000.0
+  ...
+
+Top 3 most expensive (feasible only):
+  palletize_A=11.0  assemble_B=18.0  → €1800.0
+  ...
+
+==========================================
+Detailed trace for the winning configuration:
+  palletize_A=9.0  assemble_B=10.0  → €1000.0
+
+Dispatch palletize_A (Palletize) at 9.0
+  Try:
+    [ArmStrategy ] pos=9.0 fp=[8.0..10.0] wa=[6.0..12.0] cost=1000.0  TERMINAL
+        + 1×Arm  €1000.0
+        * claims palletize_A
+        * claims assemble_B
+  >> COMPLETE solution cost=1000.0 (best so far)
+  ...
+
+Final layout:
+    tasks:        *    *
+    workzn:  =====================
+    footpr:  ###########
+    axis:    |                                                          |
+             8---------10--------12--------14--------16--------18--------
+```
+
+Symbols:
+- `o` = unclaimed task; `*` = claimed
+- `=` = work area; `#` = footprint
+- `|` = source / sink (pinned)
+
+Each proposal in the trace shows: `[Strategy] pos fp wa cost`, equipment
+added, tasks claimed, and any sub-tasks (`? needs …`) the strategy emits
+for further dispatch.
 
 ## What to try
 
-Default values: pusher cheap (€500), belts cheap, lasers cheap. Push wins.
+Default values (`palletize_A` + `assemble_B`, both 4/min, arms cheap and
+fast) produce a clear winner: **one shared arm somewhere in the middle**
+of the workflow, €1000/year.
 
-1. **Make the pusher expensive.** Set `pusher_cost_eur` to 2000. Re-run.
-   Arms win because the pusher's total package no longer competes.
+### 1. Force tasks apart with the grid
 
-2. **Lengthen the source distance.** Set `source_distance_m` to 10.0. Belt
-   cost goes up linearly (€100 base + €50/m × 10 = €600 belt alone). Push
-   total approaches arm total. Tweak till the winner flips.
+Set `outer_grid_step` to **4.0**. Fewer candidate positions for each task;
+some "good" anchors no longer reachable. Watch the cost climb if the
+grid step skips over the sweet-spot zone for the shared arm.
 
-3. **Cheap belts.** Set `per_metre_eur` to 5. Belts become trivial; Push
-   wins even at huge distances.
+### 2. Widen the workflow
 
-4. **Stress arm count.** Set `rate_per_minute` to 8.0 (above one arm's
-   capacity at default `max_rate_per_minute=10`). N=1 still works. Bump to
-   20 (above one arm's capacity) — N=2 forced. Bump to 50 — infeasible for
-   arms (`max_count=3` × 10/min = 30/min). Push may still be feasible.
+Set `workflow.sink_position` to **30.0**. The outer loop now has more
+positions to try; the cheapest combinations cluster near the source side
+because long belts get expensive.
 
-5. **Push capacity limit.** Set `push_max_rate_per_minute` to 5 and ask for
-   `rate_per_minute=8`. Push declares itself infeasible — only Arms remain.
+### 3. Raise the per-arm rate to force splitting
 
-The trace shows you exactly what each strategy proposed at each step, what
-the search picked, and why.
+Set both task rates to **6.0**. Combined rate 12/min exceeds arm
+capacity 10; the shared-arm proposal disappears. Outer loop now picks
+configurations where push+arm is cheaper than two arms — typically
+short belt distance (palletize close to source).
 
-## Reading the output
+### 4. Make arms expensive
 
-```
-=== Initial dispatch on root task: Palletize ===
-  [ArmStrategy(N=1)        ] cost=1000.0  lb= 1000.0  TERMINAL
-    + 1×Arm               €1000.0
-  [PushStrategy            ] cost= 500.0  lb=  650.0
-    + Pusher              €500.0
-    ? needs Transport
-    ? needs DetectPresence
-```
+Set `arm.cost_each_eur` to **3000**. Push becomes attractive even at
+moderate belt length. The outer winner shifts to push+arm with
+palletize near the source.
 
-- **`cost`** = sum of equipment cost realised so far in this proposal
-- **`lb`** = lower bound on this proposal's total cost (own + minimum-possible
-  remaining). Used by the search to pick what to expand next.
-- **`TERMINAL`** = no unresolved sub-tasks; this is a complete solution.
-- **`? needs X`** = sub-task this proposal emitted; must be dispatched to
-  another strategy.
+### 5. Make pushers expensive
 
-The search picks the proposal with the lowest `lb`. If it's terminal and no
-other partial's `lb` is lower, that's the winner. If it's a partial, the
-search dispatches one of its `? needs` sub-tasks to all matching strategies,
-splices their results back in, and continues.
+Set `push.pusher_cost_eur` to **2000**. Push is uncompetitive even with
+short belts; arms dominate. Shared-arm wins when geometry allows.
 
-## What this is NOT
+### 6. Shrink the workflow until something goes infeasible
 
-- Not production code. Will be deleted (or moved to `archive/`) once the
-  real solver in tiny_cell is built.
-- Not a complete model. No geometry, no real cost model, no catalog of
-  KUKA arms, no feasibility checks beyond a rate gate. Single hardcoded
-  "pusher" and "laser" with no variants.
-- Not a complete search algorithm. The lower-bound bookkeeping in `splice()`
-  is approximate (we subtract the budgeted floor and add the realised cost).
-  Good enough to demonstrate the loop; a real implementation would track
-  remaining-floor more carefully per sub-task.
+Set `workflow.sink_position` to **11.0**. Only ~1m of corridor between
+source and sink. Most position combinations have no room for footprints.
+Watch the feasibility count drop.
 
-## What we learn
+## What this NOT
 
-After running this with several different inputs:
+- Not production code. Will be deleted once tiny_cell has the real
+  solver.
+- Not a complete model: 1-D only, no real throughput modelling, no
+  catalog. Equipment costs are scalars in the JSON, not real catalog
+  entries.
+- Not optimal in absolute terms: outer-grid resolution caps the
+  achievable precision. Finer grid → more combinations → more compute.
+  For 2 tasks, even step=0.5 is instant.
 
-- The shape of `Proposal` (equipment, cost, lower bound, remaining sub-tasks)
-- The shape of `Strategy` (`name`, `can_solve`, `propose`)
-- The mechanics of `splice` (combining a child proposal into a parent partial)
-- The mechanics of best-first search with lower-bound termination
+## What this validates
 
-Whatever survives this 400-line file in spirit is what we'll port back into
-tiny_cell. Whatever doesn't was wrong.
+After running through the experiments above, all the architectural
+pieces we've discussed across the sessions are now concrete and
+testable:
+
+1. **Strategy** as a polymorphic interface: each strategy receives a
+   task + solver state + workflow + params, returns proposals.
+2. **Proposal** as a value type carrying equipment + cost + position +
+   footprint + work area + claimed tasks + remaining sub-tasks.
+3. **SolverState** as the running partial layout: occupancy intervals,
+   task positions, claimed/pinned sets.
+4. **Multi-task claims**: one proposal can cover many tasks if its work
+   area + capacity allow it. Shared equipment emerges from geometry,
+   not from a separate strategy.
+5. **Footprint-aware dispatch**: new proposals must not overlap existing
+   footprints; alternative anchors are tried.
+6. **Branch-and-bound search**: cheap-first DFS with pruning by
+   best-so-far cost.
+7. **Position-as-decision-variable**: the outer loop enumerates task
+   positions; the winning configuration has both positions and
+   equipment chosen by the solver. The user declares only the
+   workflow's intent, not its geometry.
+
+These are the pieces we'll port back to tiny_cell with the real
+throughput models, real catalogs, and 2-D geometry. The shapes stay
+the same; the values become richer.

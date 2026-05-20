@@ -1,23 +1,25 @@
 {
-  "_comment": "HTN sandbox iteration 3: task positions are SOLVED, not declared. The outer loop enumerates task positions on a grid between source and sink; the inner loop runs the strategy search per combination. Compact summary + detailed trace for the winner.",
+  "_comment": "Variation: tasks are 8m apart (no single arm covers both). Expect push+arm to win.",
   "workflow": {
     "source_position": 8.0,
-    "sink_position":   20.0
+    "sink_position":   25.0
   },
   "tasks": [
     {
       "id":              "palletize_A",
       "kind":            "Palletize",
+      "position":        10.0,
+      "mobility":         4.0,
       "rate_per_minute":  4.0
     },
     {
       "id":              "assemble_B",
       "kind":            "Assemble",
+      "position":        18.0,
+      "mobility":         4.0,
       "rate_per_minute":  4.0
     }
   ],
-  "outer_grid_step":   2.0,
-  "outer_edge_margin": 1.0,
   "strategies": {
     "arm": {
       "cost_each_eur":       1000.0,

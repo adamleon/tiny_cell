@@ -24,7 +24,11 @@ struct StrategyResult {
     std::optional<EquipmentRef> equipment;
     core::Energy energy_per_cycle;
     core::Duration cycle_time;
-    // Deferred until step 2+: poses, requires_state, effect, preconditions, partial_info.
+    // Deferred fields (intentionally absent in step 1):
+    //   * poses, requires_state, effect — added as Layer 1/2 consumers need them.
+    //   * partial_info + preconditions — turned on at step 4 with the analytic
+    //     throughput model (PARTIAL can't be computed honestly without it; see
+    //     decisions.md "PARTIAL feasibility staged to step 4").
 };
 
 // Strategy interface — pure-virtual, named after the equipment type only

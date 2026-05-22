@@ -17,3 +17,16 @@ target_compile_definitions(test_catalog PRIVATE
     TINYCELL_REPO_ROOT="${CMAKE_SOURCE_DIR}"
 )
 add_test(NAME test_catalog COMMAND test_catalog)
+
+add_executable(test_strategy test_strategy.cpp)
+target_link_libraries(test_strategy PRIVATE
+    TinyCell::core
+    TinyCell::io
+    TinyCell::solver
+    GTest::gtest
+    GTest::gtest_main
+)
+target_compile_definitions(test_strategy PRIVATE
+    TINYCELL_REPO_ROOT="${CMAKE_SOURCE_DIR}"
+)
+add_test(NAME test_strategy COMMAND test_strategy)

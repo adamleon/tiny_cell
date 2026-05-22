@@ -15,6 +15,8 @@ using Speed = quantity<isq::speed[si::metre / si::second]>;
 using Acceleration = quantity<si::metre / (si::second * si::second)>;
 using Power = quantity<isq::power[si::watt]>;
 using Duration = quantity<isq::time[si::second]>;
+// Internal energy unit is joules per data-model.md §6; convert to kWh only at UI/cost boundary.
+using Energy = quantity<isq::energy[si::joule]>;
 
 using Price = double;
 

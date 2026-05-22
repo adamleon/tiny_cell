@@ -2,3 +2,4 @@
 # Add a new subdirectory here when starting a new milestone demo.
 add_subdirectory(hello)
 add_subdirectory(step1_catalog)
+add_subdirectory(step1_strategy)

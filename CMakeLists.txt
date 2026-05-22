@@ -47,6 +47,7 @@ FetchContent_MakeAvailable(nlohmann_json)
 
 add_subdirectory(core)
 add_subdirectory(io)
+add_subdirectory(solver)
 
 if(TINYCELL_BUILD_TESTS)
     FetchContent_Declare(

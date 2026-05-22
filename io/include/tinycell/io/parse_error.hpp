@@ -1,5 +1,13 @@
 #pragma once
 
+// ParseError — the typed exception every io/ parser throws when authored
+// input is rejected. Carries the source file path and a human-readable
+// detail so the user can locate and fix the bad entry (engineering.md §3,
+// "Authored bad data → reject at parse boundary with a diagnostic").
+//
+// Never used for solver-produced invariant violations — those assert at
+// the sync/ boundary because they're bugs, not user errors (CLAUDE.md §1).
+
 #include <filesystem>
 #include <stdexcept>
 #include <string>

@@ -14,7 +14,11 @@ using nlohmann::json;
 using namespace mp_units;
 namespace tc = tinycell::core;
 
-// Throws ParseError if `key` is missing, wrong-typed, or fails `predicate`.
+// The read_* helpers below each: (1) check the field is present, (2) check
+// its JSON type is correct, (3) check the range invariant, (4) return the
+// raw value. Failure at any step throws ParseError with a message naming
+// the field. Calling code attaches units after the helper returns.
+
 double read_positive_double(const json& j, const char* key, const std::filesystem::path& src) {
     if (!j.contains(key)) {
         throw ParseError(src, std::string("missing field: ") + key);
@@ -57,6 +61,18 @@ std::string read_non_empty_string(const json& j, const char* key, const std::fil
     return v;
 }
 
+bool read_required_bool(const json& j, const char* key, const std::filesystem::path& src) {
+    if (!j.contains(key) || !j.at(key).is_boolean()) {
+        throw ParseError(src, std::string("missing or non-boolean field: ") + key);
+    }
+    return j.at(key).get<bool>();
+}
+
+// Parses the footprint array — a list of [x, y] pairs in metres in the arm's
+// local frame. Requires at least 3 vertices (a degenerate footprint would
+// silently pass downstream geometry kernels). Each coordinate is multiplied
+// by si::metre at construction so the returned Polygon carries unit-typed
+// Vec2s, not bare doubles.
 tc::Polygon read_footprint_polygon(const json& j, const std::filesystem::path& src) {
     if (!j.contains("footprint_polygon_m")) {
         throw ParseError(src, "missing field: footprint_polygon_m");
@@ -86,6 +102,11 @@ tc::Polygon read_footprint_polygon(const json& j, const std::filesystem::path& s
     return polygon;
 }
 
+// Parses a reach envelope object. Today only `type: "radius"` is supported
+// (a circular workspace). Polygonal envelopes are a future extension and
+// must be added explicitly here; an unknown type is rejected, not silently
+// defaulted, to avoid a malformed catalog producing plausible-but-wrong
+// reach data downstream.
 tc::ReachEnvelope read_reach_envelope(const json& j, const std::filesystem::path& src) {
     if (!j.contains("reach_envelope")) {
         throw ParseError(src, "missing field: reach_envelope");
@@ -115,15 +136,12 @@ tc::ReachEnvelope read_reach_envelope(const json& j, const std::filesystem::path
     };
 }
 
-bool read_required_bool(const json& j, const char* key, const std::filesystem::path& src) {
-    if (!j.contains(key) || !j.at(key).is_boolean()) {
-        throw ParseError(src, std::string("missing or non-boolean field: ") + key);
-    }
-    return j.at(key).get<bool>();
-}
-
-tc::ArmEntry parse_arm_entry(const json& j, const std::filesystem::path& src) {
-    return tc::ArmEntry{
+// Builds one ArmSpec from one catalog entry JSON object. Designated-init
+// is used (rather than default-construct + assign) because mp-units quantity
+// types are not default-constructible. The lifetime_years → seconds
+// conversion uses 365.25 days/year × 86400 s/day.
+tc::ArmSpec parse_arm_spec(const json& j, const std::filesystem::path& src) {
+    return tc::ArmSpec{
         .id = read_non_empty_string(j, "id", src),
         .model_name = read_non_empty_string(j, "model_name", src),
         .family = read_non_empty_string(j, "family", src),
@@ -139,7 +157,6 @@ tc::ArmEntry parse_arm_entry(const json& j, const std::filesystem::path& src) {
         .power_peak = read_positive_double(j, "power_peak_w", src) * si::watt,
         .power_idle = read_non_negative_double(j, "power_idle_w", src) * si::watt,
         .list_price_eur = read_positive_double(j, "list_price_eur", src),
-        // 365.25 days/year, 86400 s/day.
         .lifetime = read_positive_double(j, "lifetime_years", src) * 365.25 * 86400.0 * si::second,
         .maintenance_annual_fraction =
             read_non_negative_double(j, "maintenance_annual_fraction", src),
@@ -149,7 +166,15 @@ tc::ArmEntry parse_arm_entry(const json& j, const std::filesystem::path& src) {
 
 } // namespace
 
-std::vector<core::ArmEntry> load_arm_catalog(const std::filesystem::path& path) {
+// load_arm_catalog():
+//   1. open the file (fail with ParseError if missing/unreadable)
+//   2. parse JSON (fail with ParseError if the file isn't valid JSON)
+//   3. check top-level shape: must be an object with category="arm" and an
+//      entries array
+//   4. for each entry, run parse_arm_spec, rewrapping any json::exception
+//      into a ParseError that names the entry index
+// On success: returns one ArmSpec per entry, in declaration order.
+std::vector<core::ArmSpec> load_arm_catalog(const std::filesystem::path& path) {
     std::ifstream input(path);
     if (!input.is_open()) {
         throw ParseError(path, "could not open file");
@@ -172,11 +197,11 @@ std::vector<core::ArmEntry> load_arm_catalog(const std::filesystem::path& path) 
         throw ParseError(path, "missing or non-array field: entries");
     }
 
-    std::vector<core::ArmEntry> out;
+    std::vector<core::ArmSpec> out;
     out.reserve(doc.at("entries").size());
     for (std::size_t i = 0; i < doc.at("entries").size(); ++i) {
         try {
-            out.push_back(parse_arm_entry(doc.at("entries")[i], path));
+            out.push_back(parse_arm_spec(doc.at("entries")[i], path));
         } catch (const ParseError&) {
             throw;
         } catch (const json::exception& e) {

@@ -1,5 +1,8 @@
 #pragma once
 
+// Build version, exposed so demos and tests can identify the binary they're
+// running against. Bumped manually with each release; not derived from git.
+
 #include <string_view>
 
 namespace tinycell::version {

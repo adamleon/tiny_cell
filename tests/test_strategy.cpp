@@ -15,7 +15,7 @@ std::filesystem::path repo_root() {
     return std::filesystem::path(TINYCELL_REPO_ROOT);
 }
 
-std::vector<tc::ArmEntry> kuka_arms() {
+std::vector<tc::ArmSpec> kuka_arms() {
     return tinycell::io::load_arm_catalog(
         repo_root() / "assets" / "arm" / "kuka" / "catalog.json");
 }

@@ -1,6 +1,7 @@
 #include "tinycell/solver/arm_strategy.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <mp-units/systems/si.h>
 #include <stdexcept>
 
@@ -11,31 +12,41 @@ namespace {
 using namespace mp_units;
 namespace tc = tinycell::core;
 
-// Placeholder cycle-time and energy model. Replace with the analytic
-// per-archetype throughput / cost models when step 4 (Layer 2 allocation)
-// brings cycle-time as a hard constraint into the solver (see roadmap.md).
-// These constants are not load-bearing for step 1 — they exercise the
-// StrategyResult plumbing only.
+// PLACEHOLDER (step 4): seconds-per-box is a flat 3 s and the duty cycle is
+// a flat 0.6 (60% of cycle time at peak power, 40% at idle). Real analytic
+// per-archetype throughput + energy models arrive at step 4 with Layer 2
+// (decisions.md, "PARTIAL feasibility staged to step 4"). These constants
+// exist only to exercise the StrategyResult plumbing and produce numbers
+// you can eyeball in tests and the demo — they are NOT load-bearing.
 constexpr double placeholder_seconds_per_box = 3.0;
 constexpr double placeholder_arm_active_duty_fraction = 0.6;
 
-// Pick the cheapest feasible arm — payload >= item mass, and the pallet
-// footprint fits inside the arm's max reach when centred. The reach check
-// is rough: the diagonal of the pallet bounding box must fit within reach.
-const tc::ArmEntry* select_arm(const tc::PalletizeParams& p,
-                               std::span<const tc::ArmEntry> catalog) {
+// select_arm():
+//   1. for each arm in the catalog
+//   2.   reject if payload_max < item.mass (can't lift it)
+//   3.   reject if reach.max_radius < half the pallet diagonal
+//        (rough proxy — see PLACEHOLDER note below)
+//   4. among remaining arms, return the one with the lowest list_price_eur
+// Returns nullptr if no arm satisfies both filters.
+//
+// PLACEHOLDER (step 4-5): the reach check is the half-pallet-diagonal proxy.
+// A centred arm with max_radius ≥ half-diagonal can reach the pallet corners
+// in principle, but real reachability depends on the arm's specific work
+// envelope (min reach, joint limits, ground/post obstacles), which comes
+// from precomputed workspace tables (architecture.md §5, the COROS-2020
+// sphere-collision approach). Arms close to the boundary here may turn out
+// infeasible when real reach is computed.
+const tc::ArmSpec* select_arm(const tc::PalletizeParams& p,
+                              std::span<const tc::ArmSpec> catalog) {
     const auto pallet_diagonal_m = std::sqrt(
         std::pow(p.pallet.width.numerical_value_in(si::metre), 2) +
         std::pow(p.pallet.length.numerical_value_in(si::metre), 2));
 
-    const tc::ArmEntry* best = nullptr;
+    const tc::ArmSpec* best = nullptr;
     for (const auto& arm : catalog) {
         if (arm.payload_max < p.item.mass) {
             continue;
         }
-        // Half the pallet diagonal is the worst-case reach distance from a
-        // centred arm. Real reachability comes from precomputed workspace
-        // tables in a later step.
         if (arm.reach.max_radius.numerical_value_in(si::metre) < 0.5 * pallet_diagonal_m) {
             continue;
         }
@@ -48,16 +59,25 @@ const tc::ArmEntry* select_arm(const tc::PalletizeParams& p,
 
 } // namespace
 
-ArmStrategy::ArmStrategy(std::span<const tc::ArmEntry> catalog) : catalog_(catalog) {}
+ArmStrategy::ArmStrategy(std::span<const tc::ArmSpec> catalog) : catalog_(catalog) {}
 
 std::string_view ArmStrategy::name() const { return "ArmStrategy"; }
 
+// applies_to(): the arm covers any task kind the strategy class is willing
+// to solve. Today that's Palletize only; add Transport / Grip / Assemble
+// here (and add the corresponding logic in evaluate) as those task kinds
+// come online. Keep the switch over TaskKind exhaustive — when a new kind
+// is added, the compiler will warn here if it isn't handled.
 bool ArmStrategy::applies_to(const tc::Task& task) const {
-    // For step 1, an arm covers Palletize. Add Transport / Grip / Assemble
-    // as those TaskKinds come online.
     return task.kind() == tc::TaskKind::Palletize;
 }
 
+// evaluate(): produces a candidate proposal for the given task.
+//   1. precondition check — task must be one we apply to
+//   2. for a Palletize task, pick the cheapest feasible arm via select_arm
+//   3. if no arm is feasible, return INFEASIBLE with zero metrics
+//   4. otherwise compute placeholder cycle_time and energy_per_cycle and
+//      return FULL with the chosen arm as candidate equipment
 StrategyResult ArmStrategy::evaluate(const tc::Task& task) const {
     if (!applies_to(task)) {
         throw std::logic_error("ArmStrategy::evaluate called on inapplicable task");
@@ -75,6 +95,8 @@ StrategyResult ArmStrategy::evaluate(const tc::Task& task) const {
         };
     }
 
+    // PLACEHOLDER (step 4): cycle_time and energy_per_cycle come from flat
+    // constants, not a real model. See the placeholder_* constants above.
     const auto cycle_time = placeholder_seconds_per_box
                             * static_cast<double>(p.box_count) * si::second;
     const auto active_seconds = cycle_time.numerical_value_in(si::second)

@@ -1,4 +1,4 @@
-// demo_step1_catalog — milestone demo for step 1a (catalog loading).
+// demo_arm_catalog — arm-catalog loading.
 //
 // Demonstrates: the io/ catalog loader reads `assets/arm/kuka/catalog.json`,
 // parses it through `load_arm_catalog`, validates each entry at the parse

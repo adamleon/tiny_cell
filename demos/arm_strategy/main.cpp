@@ -1,4 +1,4 @@
-// demo_step1_strategy — milestone demo for step 1b (strategy library).
+// demo_arm_strategy — ArmStrategy evaluating a Palletize task.
 //
 // Demonstrates: the full chain io/ → core/ → solver/. Loads the KUKA arm
 // catalog, constructs an ArmStrategy bound to it, builds a sample Palletize

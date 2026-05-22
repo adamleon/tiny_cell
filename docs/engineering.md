@@ -76,7 +76,7 @@ The design docs are emphatic and consistent: **never silently clamp a bad value*
 
 | Situation | Origin | Recoverable? | Mechanism | Why |
 |---|---|---|---|---|
-| **Authored bad data** | user YAML / catalog (`io/`) | Yes — report and reject | **Reject at parse boundary with a diagnostic** (error value or typed parse exception carrying a message) | The user can fix their input; they need a message saying what and where, not a crash. Caught at the `io/` boundary (`CLAUDE.md` §0, §8). |
+| **Authored bad data** | user JSON / catalog (`io/`) | Yes — report and reject | **Reject at parse boundary with a diagnostic** (error value or typed parse exception carrying a message) | The user can fix their input; they need a message saying what and where, not a crash. Caught at the `io/` boundary (`CLAUDE.md` §0, §8). |
 | **Solver-produced invariant violation** | a bug in our code (`solver/` emits a value that fails a validated-component invariant at the `sync/` boundary) | No — it's a defect | **Assert / throw** | This can never happen if the solver is correct; if it happens, the solver is wrong and must fail loudly, not limp on. (`CLAUDE.md` §1, §8; `decisions.md` validated-components entry.) |
 | **Missing catalog spec / standards number** | absent input entry | Yes — report | **Reject as an input error; never fabricate** | A missing entry is an input error, not a default to invent (`CLAUDE.md` §1, `data-model.md` §3, `standards.md`). Same path as authored-bad-data. |
 

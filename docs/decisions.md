@@ -34,6 +34,8 @@ One entry per resolved design choice + the one-line *why*. Insurance against sil
 
 ## Architecture decisions
 
+**Catalog & workflow input format: JSON, not YAML.** *Why:* nlohmann/json is already part of the stack via the io/ parser, has stronger Windows/MSVC traction than yaml-cpp, and avoids adding a second text-config dependency. Authored bad data is still rejected with a typed `ParseError` at the `io/` boundary (`engineering.md` §3); the format choice is independent of the error mechanism.
+
 **C++ throughout; interactive app from day one.** *Why:* EnTT + threepp + ImGui is a C++ GUI stack; OR-Tools and IPOPT are natively C++. No headless-CLI-first phase — interactivity is implied by the stack.
 
 **Solver is a pure module on its own structs, syncs into the EnTT registry.** *Why:* LNS explores thousands of discarded candidates; mutating the live registry per candidate would thrash the renderer and couple search to ECS identity. The `sync/` step is the boundary.

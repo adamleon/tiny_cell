@@ -1,3 +1,19 @@
+// demo_step1_strategy — milestone demo for step 1b (strategy library).
+//
+// Demonstrates: the full chain io/ → core/ → solver/. Loads the KUKA arm
+// catalog, constructs an ArmStrategy bound to it, builds a sample Palletize
+// task (24 boxes of 5 kg each onto a 1.2 × 0.8 m pallet), and asks the
+// strategy to evaluate. Prints the candidate equipment binding plus
+// placeholder cycle-time and energy figures.
+//
+// Success: prints `feasibility: FULL`, picks `kuka_kr6_r900_2` (the
+// cheapest catalog arm meeting both payload and the half-pallet-diagonal
+// reach proxy), and labels the cycle-time / energy as PLACEHOLDER for
+// step 4. If you see `feasibility: INFEASIBLE`, either the catalog can't
+// satisfy the task (check the printed pallet/box numbers) or the reach
+// proxy was tightened — re-read `select_arm`'s comments in
+// solver/src/arm_strategy.cpp.
+
 #include <filesystem>
 #include <iomanip>
 #include <iostream>

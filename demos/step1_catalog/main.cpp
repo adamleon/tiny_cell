@@ -1,3 +1,16 @@
+// demo_step1_catalog — milestone demo for step 1a (catalog loading).
+//
+// Demonstrates: the io/ catalog loader reads `assets/arm/kuka/catalog.json`,
+// parses it through `load_arm_catalog`, validates each entry at the parse
+// boundary (throwing ParseError on any structural or range violation), and
+// returns a strongly-typed `std::vector<ArmSpec>` that core/solver code can
+// consume without further checking.
+//
+// Success: prints a table of 11 KUKA arms with id, family, reach, payload,
+// and price. The list spans Agilus (sub-1.1 m reach), Cybertech (1.6-2.1 m),
+// and Quantec PA (3.2 m, palletizer arms). Exits 0; any non-zero exit means
+// the loader rejected an entry — the message names which field and where.
+
 #include <filesystem>
 #include <iomanip>
 #include <iostream>

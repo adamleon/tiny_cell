@@ -98,7 +98,7 @@ World transforms happen **only at the top level, only for the station that moved
 
 ### Accumulated footprint: hull + union (broad/narrow phase)
 
-**One unified `StationFootprint` object** (`data-model-v2.md` §3.1) holding both fidelities — they describe the same footprint and share invalidation, so they are never cached separately (preventing drift). Within it:
+**One unified `StationFootprint` object** (`data-model.md` §3.1) holding both fidelities — they describe the same footprint and share invalidation, so they are never cached separately (preventing drift). Within it:
 - **Convex hull** — always present; fast-reject broad phase. Hulls don't overlap → stations definitely don't collide → done. Covers the common "clearly no collision" case with one cheap test. Also serves as a cheap "floor wanted" proxy for Layer 2 / positional-prior spacing, so it has consumers beyond collision.
 - **True union** (non-convex) — **lazy/optional**; built only on the first narrow-phase need (when hulls *do* overlap — might be a real collision, might be a nestable concavity, e.g. an L-shaped station's notch against a neighbor) and cached until the next intra-station change. Packs tighter but costlier; stations never in a close call this iteration never pay union cost.
 

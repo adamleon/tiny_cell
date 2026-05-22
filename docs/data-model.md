@@ -82,7 +82,7 @@ CatalogEntry {
 
 ### 3.1 Station footprint cache
 
-A station's footprint is the **accumulated** footprint of its equipment (equipment poses are relative to the station frame). Hull and union are **one unified object** (shared invalidation — they describe the same footprint at two fidelities, so they must never drift apart), but the **union is built lazily**: most collision checks are resolved by the hull broad-phase and never need it (see `solver-v2.md` "Geometry flattening & caching", broad/narrow phase).
+A station's footprint is the **accumulated** footprint of its equipment (equipment poses are relative to the station frame). Hull and union are **one unified object** (shared invalidation — they describe the same footprint at two fidelities, so they must never drift apart), but the **union is built lazily**: most collision checks are resolved by the hull broad-phase and never need it (see `solver.md` "Geometry flattening & caching", broad/narrow phase).
 
 ```
 StationFootprint {

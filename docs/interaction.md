@@ -32,9 +32,9 @@ Must accept: (a) a warm-start initial layout, (b) a set of hard-pinned poses, (c
 
 ## Drag tiers map onto the footprint cache levels
 
-The graded tiers reuse the solver's two-level footprint cache (`solver-v2.md` "Geometry flattening & caching", `data-model-v2.md` §3.1) directly:
+The graded tiers reuse the solver's two-level footprint cache (`solver.md` "Geometry flattening & caching", `data-model.md` §3.1) directly:
 
 - **Dragging equipment *within* a station** = an **intra-station** invalidation: rebuild that station's `*_local` footprint, re-check against neighbors via `world_*`. This is Tier 1 (local geometry).
 - **Dragging a *station*** = an **inter-station** invalidation: re-transform only that station's `world_*` footprint (one transform), re-check against neighbors; the station's internals are untouched. Tier 1 if it stays within thresholds; escalates to Tier 3 if it crosses a sharing/flow threshold (§ trigger thresholds).
 
-So the same cache machinery and the same move-then-reorganize repair (`solver-v2.md`) serve both batch LNS and interactive editing — no separate interactive geometry path.
+So the same cache machinery and the same move-then-reorganize repair (`solver.md`) serve both batch LNS and interactive editing — no separate interactive geometry path.

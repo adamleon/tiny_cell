@@ -12,22 +12,22 @@ The solution need not be globally optimal — approximately optimal is acceptabl
 
 | Doc | Contents | Status |
 |---|---|---|
-| `README-v2.md` | This file: glossary, map | — |
-| `architecture-v2.md` | System-level module breakdown, boundaries, data flow, frames, geometry/units, ECS | Written |
-| `data-model-v2.md` | All type/schema contracts (Task, Strategy, ItemState, catalog, footprint cache, output) | Written |
-| `solver-v2.md` | The solver algorithm: three layers + LNS optimizer + positional prior + geometry flattening & caching | Written |
-| `interaction-v2.md` | Graded interactive editing ; maps onto footprint cache levels | Written |
+| `README.md` | This file: glossary, map | — |
+| `architecture.md` | System-level module breakdown, boundaries, data flow, frames, geometry/units, ECS | Written |
+| `data-model.md` | All type/schema contracts (Task, Strategy, ItemState, catalog, footprint cache, output) | Written |
+| `solver.md` | The solver algorithm: three layers + LNS optimizer + positional prior + geometry flattening & caching | Written |
+| `interaction.md` | Graded interactive editing ; maps onto footprint cache levels | Written |
 | `standards.md` | Compliance standards + rules-file schema | **STUB — needs your input** |
 | `roadmap.md` | Build order, MVP milestone definition, open questions | Written |
-| `decisions-v2.md` | Decision log: each resolved choice + one-line why | Written |
+| `decisions.md` | Decision log: each resolved choice + one-line why | Written |
 
 ## How to use these docs (for an implementation session)
 
 Load only what the task needs:
-- Catalog parser → `data-model-v2.md` + `roadmap.md`
-- AND-OR expansion → `solver-v2.md` + `data-model-v2.md`
-- Standards into placement → `standards.md` + `solver-v2.md` (Layer 3)
-- Interactive editor (later) → `interaction-v2.md` + `data-model-v2.md`
+- Catalog parser → `data-model.md` + `roadmap.md`
+- AND-OR expansion → `solver.md` + `data-model.md`
+- Standards into placement → `standards.md` + `solver.md` (Layer 3)
+- Interactive editor (later) → `interaction.md` + `data-model.md`
 
 ## Scope tags
 
@@ -61,6 +61,6 @@ MVP is a *subset and sequence* of this design, not a separate design. There is n
 
 **Point vs. segment equipment** — Point/footprint equipment (arm, gripper, camera, pusher, fixture) anchors to a pose; cost fixed at binding. Segment equipment (conveyor) connects two poses; length/footprint/cost are **layout-dependent**, re-evaluated each optimizer iteration.
 
-**Frame / FrameId** — A nested reference frame for poses, with its own id space (World = FrameId 1, `null` = undefined) — **not** an ECS entity id. A `Pose2D` is expressed *in* a frame; resolving across frames composes rigid **transforms** (not triplet arithmetic). See `architecture-v2.md` §4.
+**Frame / FrameId** — A nested reference frame for poses, with its own id space (World = FrameId 1, `null` = undefined) — **not** an ECS entity id. A `Pose2D` is expressed *in* a frame; resolving across frames composes rigid **transforms** (not triplet arithmetic). See `architecture.md` §4.
 
 **FactoryCell** — The domain name for the live world state (held in the EnTT registry). Distinct from the threepp render `Scene` and from EnTT's `registry` — three different things, three names.

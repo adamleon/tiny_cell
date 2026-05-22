@@ -13,6 +13,31 @@
 5. **Layer 3 placement** — 2D NLP with positional-prior seeding (`solver.md` Layer 3 + positional prior). Build warm-start + partial-freeze support now (needed by both LNS and future interaction).
 6. **LNS + annealing** outer loop tying it together (`solver.md` outer loop).
 
+## Supporting tools
+
+Built incrementally alongside the build steps, not separate milestones.
+Add capability when the layer it serves first needs it.
+
+- **`svg/` — 2D vector export of solver output.** Debug oracle for every
+  solver layer that carries geometry. Pure C++ stdlib (no new
+  dependencies); browser/phone viewable; diff-friendly, so SVGs can
+  serve as CI regression artifacts.
+  - Step 1: each catalog entry's footprint + (for arms) reach envelope —
+    visual sanity check on `load_*_catalog`.
+  - Step 4: station-local accumulated footprints (hull + union per
+    `data-model.md` §3.1) — verify intra-station packing before
+    inter-station placement runs.
+  - Step 5: the headline use — full `LayoutSolution` in world coords
+    (equipment polygons, transfer arrows, clearance buffers, floor
+    bounds).
+  - Step 6: same as step 5; before/after pairs make LNS regressions
+    visible by diff.
+
+  Distinct from `render/` (threepp, post-MVP, interactive 3D, reads from
+  the EnTT registry) — `svg/` reads solver-internal structs + catalogs
+  directly and emits text. The two coexist after MVP: SVG for batch /
+  CI / diffs, threepp for interactive editing.
+
 ## MVP milestone — "done" means
 
 - Catalog + strategy library loadable and validated.

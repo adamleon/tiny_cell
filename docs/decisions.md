@@ -32,6 +32,8 @@ One entry per resolved design choice + the one-line *why*. Insurance against sil
 
 **Graded interaction over single re-solve path.** A drag invalidates only the cheapest layer it breaks. *Why:* full re-solve per drag is far too slow for interactivity; tiered scope keeps free moves at frame rate and reserves full LNS for moves that genuinely change structure.
 
+**SVG export of solver output is MVP-scope debug tooling.** A `svg/` top-level module emits 2D vector visualizations of any solver-layer output that carries geometry — catalog footprints + reach envelopes (step 1), station-local accumulated footprints (step 4), full `LayoutSolution` in world coords (steps 5-6). Pure C++ stdlib (no new dependencies); used by per-step demos and viable as a CI regression artifact (text → diff-friendly). Built incrementally per `roadmap.md` "Supporting tools", not a milestone in its own right. *Why:* the gap between when geometric solutions first exist (step 5, Layer 3) and when the threepp renderer / GUI arrive (post-MVP) covers the entire MVP-finalisation phase — without SVG, "did the solver place things sensibly?" is answered by reading JSON. SVG fills the gap cheaply and stays useful as a debug oracle even after threepp exists: different fidelity, different purpose. `svg/` is distinct from `render/` (threepp, post-MVP, interactive 3D, reads from the EnTT registry); SVG reads solver-internal structs + catalogs directly, has no foreign-lib dependencies, and emits text. They coexist after MVP — SVG for batch / CI / diff-friendly inspection, threepp for interactive editing.
+
 ---
 
 ## Architecture decisions

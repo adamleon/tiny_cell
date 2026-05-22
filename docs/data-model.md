@@ -28,6 +28,8 @@ Strategy.applies_to(task) -> bool
 
 A strategy may apply to multiple task *kinds* (e.g. a pusher applies to both "push off belt" and "palletize"). Do **not** wire strategies to task names — capability matching is what enables strategy-class reuse.
 
+Concretely: name strategies after the *equipment type only*, not `(equipment × task)`. Use `ArmStrategy` (one class covering `Palletize`, `Transport`, `Assemble`), not `ArmPalletizeStrategy` + `ArmTransportStrategy` + `ArmAssembleStrategy`. Shape tasks equipment-agnostically (`Palletize(item, pallet, count)`, not `PalletizeWithArm`) so the OR-node fan-out has multiple strategies to choose between. See `decisions.md`.
+
 ```
 Strategy.evaluate(task, context) -> StrategyResult {
   feasibility:    FULL | PARTIAL | INFEASIBLE,

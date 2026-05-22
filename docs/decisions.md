@@ -34,6 +34,8 @@ One entry per resolved design choice + the one-line *why*. Insurance against sil
 
 ## Architecture decisions
 
+**Validated value types staged in at step 4 / Layer 2 allocation, not step 1.** *Why:* the wrapper layer (`PositiveLength`, `Payload`, `ReachRadius`, … — `architecture.md` §8) protects against *solver-produced* invalid values. In step 1 the only producer is the JSON loader, which validates at the `io/` boundary anyway; an extra wrapper layer is ~80 LOC enforcing nothing the loader doesn't already enforce. Step 4 (Layer 2 allocation) is the first point where solver code can violate a range invariant — that's when wrappers earn their cost. ArmEntry uses raw mp-units quantity types until then; promoting fields to wrapped value types is a mechanical per-field refactor when the time comes. (Reverses nothing in `architecture.md` §8 — that section describes the end state; this entry sequences when the layer is introduced.)
+
 **Catalog & workflow input format: JSON, not YAML.** *Why:* nlohmann/json is already part of the stack via the io/ parser, has stronger Windows/MSVC traction than yaml-cpp, and avoids adding a second text-config dependency. Authored bad data is still rejected with a typed `ParseError` at the `io/` boundary (`engineering.md` §3); the format choice is independent of the error mechanism.
 
 **C++ throughout; interactive app from day one.** *Why:* EnTT + threepp + ImGui is a C++ GUI stack; OR-Tools and IPOPT are natively C++. No headless-CLI-first phase — interactivity is implied by the stack.

@@ -185,6 +185,8 @@ Components carrying invariants are **not** plain public-field PODs. A length mus
 - **Validated components use accessor methods, not public fields, and are not accessed via raw EnTT pool iteration** (which would bypass invariants). Reserve raw-data access for genuinely-POD components (tags, flags).
 - **This does not tax the solver:** the solver works on its own lean internal structs; validation happens at the **sync boundary** (boundary frequency), not in the LNS inner loop.
 
+**Staging.** The wrapper layer is introduced at **step 4 / Layer 2** (`roadmap.md`, `decisions.md`), not step 1. Step 1's catalog parses to raw mp-units quantity types and validates range invariants in the JSON loader; the wrapper layer earns its cost once solver code can produce or mutate values, which begins at Layer 2. This is sequencing, not a softening of §8 — the end state described here is unchanged.
+
 ## 9. Optimizer seams (open, low-cost)
 
 Layer 2 (CP-SAT candidate) and Layer 3 (IPOPT candidate) optimizers sit **inside** `solver/` and consume the solver's internal problem representation — they never touch core stored types, so leaving the choice open has no architectural cost. The solver converts frame-resolved geometry into optimizer form (CP-SAT vars / NLP callbacks) at an internal seam.

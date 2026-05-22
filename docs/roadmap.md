@@ -6,10 +6,10 @@
 
 ## Build order
 
-1. **Equipment catalog + strategy library** (`data-model.md` §2–3). Rigorously type what each strategy consumes (`requires_state`, guards, structural preconditions) and produces (`effect`, equipment, energy). The solver is generic; this domain knowledge determines whether output is usable. **Do this first.**
+1. **Equipment catalog + strategy library** (`data-model.md` §2–3). Rigorously type what each strategy consumes (`requires_state`, guards, structural preconditions) and produces (`effect`, equipment, energy). The solver is generic; this domain knowledge determines whether output is usable. **Do this first.** *Note:* catalog structs use raw mp-units quantity types in step 1; range invariants are enforced in the JSON loader at the `io/` boundary. Validated value-type wrappers (`architecture.md` §8) are staged in at step 4 — see `decisions.md`.
 2. **Brute-force enumerator** over tiny problems (3–5 tasks) to validate the strategy library produces sensible plans before any metaheuristic can hide bad engineering.
 3. **Item-state propagation** pass over the workflow DAG (`data-model.md` §4) with the MVP-scoped state vector.
-4. **Layer 2 allocation** — assignment/packing with sharing (`solver.md` Layer 2).
+4. **Layer 2 allocation** — assignment/packing with sharing (`solver.md` Layer 2). **Introduce validated value-type wrappers (`architecture.md` §8) for the fields Layer 2 can produce or mutate**: this is the first point where solver code can emit a value that fails a range invariant (per `decisions.md`). Grow the wrapper set field-by-field as Layer 2 touches them — don't wrap fields no solver code consumes yet.
 5. **Layer 3 placement** — 2D NLP with positional-prior seeding (`solver.md` Layer 3 + positional prior). Build warm-start + partial-freeze support now (needed by both LNS and future interaction).
 6. **LNS + annealing** outer loop tying it together (`solver.md` outer loop).
 

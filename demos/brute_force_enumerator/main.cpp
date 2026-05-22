@@ -12,14 +12,15 @@
 // the winner row identifies which strategy + catalog entry was chosen.
 // Expected qualitative outcome (energies are placeholders):
 //   * task_small  — both feasible; PusherStrategy typically wins on
-//                   placeholder energy (lower duty fraction × cheaper
-//                   short-stroke pusher).
-//   * task_heavy  — PusherStrategy is feasible only at the heavy-duty end
-//                   of the pusher catalog; ArmStrategy may pick a larger
-//                   Cybertech / Quantec arm.
-//   * task_large_pallet — PusherStrategy goes INFEASIBLE (no pusher's
-//                   stroke covers a 2 m pallet); ArmStrategy wins by
-//                   default with a Cybertech arm.
+//                   placeholder energy. The pusher transfers a full row
+//                   per stroke, so its cycle time is much lower than the
+//                   per-box arm.
+//   * task_heavy  — PusherStrategy INFEASIBLE: pushing two 40 kg boxes per
+//                   stroke = 80 kg row payload, exceeding even the heavy
+//                   pusher (60 kg). ArmStrategy wins with a Quantec PA arm.
+//   * task_large_pallet — PusherStrategy INFEASIBLE: no pusher in the
+//                   catalog has 2 m stroke. ArmStrategy wins with a
+//                   Cybertech arm.
 // If you see "no winner" on a task, every strategy returned non-FULL —
 // inspect the proposals list to see which guard rejected each.
 

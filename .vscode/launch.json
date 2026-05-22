@@ -1,0 +1,34 @@
+{
+    // Single config that debugs whichever CMake target is currently selected
+    // in the status bar (set via "CMake: Set Launch Target"). Works for every
+    // demo and test in the project — current and future — without per-target
+    // edits here. Requires the "ms-vscode.cmake-tools" extension (see
+    // extensions.json). To pick a target: click the target name in the
+    // bottom-left status bar, or run "CMake: Set Launch/Debug Target".
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug current CMake target",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${command:cmake.launchTargetPath}",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "console": "integratedTerminal",
+            "preLaunchTask": "CMake: build"
+        },
+        {
+            "name": "Run current CMake target (no debugger)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${command:cmake.launchTargetPath}",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "console": "integratedTerminal",
+            "preLaunchTask": "CMake: build",
+            "noDebug": true
+        }
+    ]
+}

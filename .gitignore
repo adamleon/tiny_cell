@@ -6,9 +6,11 @@ build-mingw/
 # CMake user-specific files
 CMakeUserPresets.json
 
-# Editor
-.vscode/*.db
-.vscode/.vcvars-cache.json
+# Editor — track shared config (launch / tasks / extensions); ignore per-user files
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/extensions.json
 *.swp
 *~
 
@@ -22,3 +24,7 @@ compile_commands.json
 
 # Future: package manager
 vcpkg_installed/
+
+# Claude Code — track shared project settings; ignore per-user overrides + caches
+.claude/*
+!.claude/settings.json

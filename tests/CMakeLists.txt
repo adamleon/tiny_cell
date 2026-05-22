@@ -30,3 +30,16 @@ target_compile_definitions(test_strategy PRIVATE
     TINYCELL_REPO_ROOT="${CMAKE_SOURCE_DIR}"
 )
 add_test(NAME test_strategy COMMAND test_strategy)
+
+add_executable(test_enumerator test_enumerator.cpp)
+target_link_libraries(test_enumerator PRIVATE
+    TinyCell::core
+    TinyCell::io
+    TinyCell::solver
+    GTest::gtest
+    GTest::gtest_main
+)
+target_compile_definitions(test_enumerator PRIVATE
+    TINYCELL_REPO_ROOT="${CMAKE_SOURCE_DIR}"
+)
+add_test(NAME test_enumerator COMMAND test_enumerator)

@@ -1,0 +1,66 @@
+{
+  "schema_version": "0.1",
+  "category": "pusher",
+  "vendor": "Generic",
+  "_notes": [
+    "Four placeholder pneumatic / electric linear pushers spanning short-stroke light-duty through long-stroke heavy-duty. Vendor data is intentionally generic — no specific catalog was traced. Replace with real datasheets (Festo, SMC, Bosch Rexroth) before any engineering decision relies on these numbers.",
+    "Footprints are rectangular base plates approximated from photos of typical pneumatic stations; the cylinder body sits inside a footprint that also includes the mounting flange.",
+    "cycle_time_per_push_s is the round-trip time for ONE box transfer (extend + retract + dwell). For palletizing it bounds the per-box rate.",
+    "stroke_m is the actuator's maximum linear travel. For palletizing this gates how deep into the pallet a box can be pushed.",
+    "Prices, power figures, and lifetimes are rough engineering estimates so the enumerator has comparable cost numbers; refine before use."
+  ],
+  "entries": [
+    {
+      "id": "pusher_short_light",
+      "model_name": "GP-S200-L",
+      "family": "pneumatic_short",
+      "controller_class": "small",
+      "footprint_polygon_m": [[-0.10, -0.06], [0.10, -0.06], [0.10, 0.06], [-0.10, 0.06]],
+      "stroke_m": 0.2,
+      "payload_max_kg": 5.0,
+      "cycle_time_per_push_s": 1.2,
+      "power_peak_w": 400.0,
+      "power_idle_w": 30.0,
+      "list_price_eur": 3200.0
+    },
+    {
+      "id": "pusher_mid_medium",
+      "model_name": "GP-M500-M",
+      "family": "pneumatic_mid",
+      "controller_class": "small",
+      "footprint_polygon_m": [[-0.18, -0.08], [0.18, -0.08], [0.18, 0.08], [-0.18, 0.08]],
+      "stroke_m": 0.5,
+      "payload_max_kg": 15.0,
+      "cycle_time_per_push_s": 1.8,
+      "power_peak_w": 900.0,
+      "power_idle_w": 60.0,
+      "list_price_eur": 5500.0
+    },
+    {
+      "id": "pusher_long_medium",
+      "model_name": "GE-L1000-M",
+      "family": "electric_long",
+      "controller_class": "medium",
+      "footprint_polygon_m": [[-0.30, -0.10], [0.30, -0.10], [0.30, 0.10], [-0.30, 0.10]],
+      "stroke_m": 1.0,
+      "payload_max_kg": 25.0,
+      "cycle_time_per_push_s": 2.4,
+      "power_peak_w": 1500.0,
+      "power_idle_w": 120.0,
+      "list_price_eur": 9800.0
+    },
+    {
+      "id": "pusher_long_heavy",
+      "model_name": "GE-L1500-H",
+      "family": "electric_long",
+      "controller_class": "medium",
+      "footprint_polygon_m": [[-0.42, -0.14], [0.42, -0.14], [0.42, 0.14], [-0.42, 0.14]],
+      "stroke_m": 1.5,
+      "payload_max_kg": 60.0,
+      "cycle_time_per_push_s": 3.0,
+      "power_peak_w": 2400.0,
+      "power_idle_w": 200.0,
+      "list_price_eur": 16500.0
+    }
+  ]
+}

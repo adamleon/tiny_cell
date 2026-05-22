@@ -8,6 +8,7 @@
 
 #include <filesystem>
 #include <tinycell/model/arm.hpp>
+#include <tinycell/model/pusher.hpp>
 #include <vector>
 
 namespace tinycell::io {
@@ -19,5 +20,12 @@ namespace tinycell::io {
 // and throws ParseError with a source-locating message on any violation.
 // On success, returns the entries in catalog declaration order.
 std::vector<core::ArmSpec> load_arm_catalog(const std::filesystem::path& path);
+
+// Loads a pusher catalog from JSON at `path`. Same contract as
+// load_arm_catalog (per-category loader — decisions.md): file must declare
+// `category: "pusher"` and an `entries` array; range invariants are checked
+// at parse time; ParseError thrown on any violation with a source-locating
+// message. Returned in catalog declaration order.
+std::vector<core::PusherSpec> load_pusher_catalog(const std::filesystem::path& path);
 
 } // namespace tinycell::io

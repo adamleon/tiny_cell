@@ -3,3 +3,4 @@
 add_subdirectory(hello)
 add_subdirectory(arm_catalog)
 add_subdirectory(arm_strategy)
+add_subdirectory(brute_force_enumerator)

@@ -4,6 +4,7 @@
 #include <tinycell/io/catalog_loader.hpp>
 #include <tinycell/model/task.hpp>
 #include <tinycell/solver/arm_strategy.hpp>
+#include <tinycell/solver/pusher_strategy.hpp>
 
 namespace {
 
@@ -18,6 +19,11 @@ std::filesystem::path repo_root() {
 std::vector<tc::ArmSpec> kuka_arms() {
     return tinycell::io::load_arm_catalog(
         repo_root() / "assets" / "arm" / "kuka" / "catalog.json");
+}
+
+std::vector<tc::PusherSpec> generic_pushers() {
+    return tinycell::io::load_pusher_catalog(
+        repo_root() / "assets" / "pusher" / "generic" / "catalog.json");
 }
 
 tc::Task small_palletize_task() {
@@ -95,4 +101,66 @@ TEST(ArmStrategy, PicksLargerArmForLargePallet) {
     EXPECT_TRUE(result.equipment->catalog_id == "kuka_kr16_r1610" ||
                 result.equipment->catalog_id == "kuka_kr22_r1610")
         << "got " << result.equipment->catalog_id;
+}
+
+TEST(PusherStrategy, NameAndAppliesTo) {
+    auto pushers = generic_pushers();
+    ts::PusherStrategy strategy(pushers);
+    EXPECT_EQ(strategy.name(), "PusherStrategy");
+    EXPECT_TRUE(strategy.applies_to(small_palletize_task()));
+}
+
+TEST(PusherStrategy, FeasibleWhenStrokeCoversPallet) {
+    auto pushers = generic_pushers();
+    ts::PusherStrategy strategy(pushers);
+    // 1.2 x 0.8 m pallet → required stroke = 1.2 m. 5 kg item.
+    // pusher_long_medium has stroke 1.0 m (too short); pusher_long_heavy
+    // (1.5 m, 60 kg, EUR 16500) is the only feasible one.
+    auto result = strategy.evaluate(small_palletize_task());
+    EXPECT_EQ(result.feasibility, ts::Feasibility::FULL);
+    ASSERT_TRUE(result.equipment.has_value());
+    EXPECT_EQ(result.equipment->catalog_id, "pusher_long_heavy");
+    EXPECT_GT(result.cycle_time.numerical_value_in(si::second), 0.0);
+    EXPECT_GT(result.energy_per_cycle.numerical_value_in(si::joule), 0.0);
+}
+
+TEST(PusherStrategy, PicksCheapestFeasibleForShortPallet) {
+    auto pushers = generic_pushers();
+    ts::PusherStrategy strategy(pushers);
+    auto task = small_palletize_task();
+    auto& p = std::get<tc::PalletizeParams>(task.params);
+    // Shrink the pallet so a cheaper short-stroke pusher becomes feasible.
+    p.pallet.width = 0.4 * si::metre;
+    p.pallet.length = 0.3 * si::metre;
+    auto result = strategy.evaluate(task);
+    EXPECT_EQ(result.feasibility, ts::Feasibility::FULL);
+    ASSERT_TRUE(result.equipment.has_value());
+    // pusher_mid_medium has stroke 0.5 m, 15 kg payload, cheapest at EUR 5500
+    // that satisfies the 0.4 m required stroke. pusher_short_light (stroke
+    // 0.2 m) is too short.
+    EXPECT_EQ(result.equipment->catalog_id, "pusher_mid_medium");
+}
+
+TEST(PusherStrategy, InfeasibleForLargePallet) {
+    auto pushers = generic_pushers();
+    ts::PusherStrategy strategy(pushers);
+    auto task = small_palletize_task();
+    auto& p = std::get<tc::PalletizeParams>(task.params);
+    // 2 m pallet > largest stroke (1.5 m).
+    p.pallet.width = 2.0 * si::metre;
+    p.pallet.length = 2.0 * si::metre;
+    auto result = strategy.evaluate(task);
+    EXPECT_EQ(result.feasibility, ts::Feasibility::INFEASIBLE);
+    EXPECT_FALSE(result.equipment.has_value());
+}
+
+TEST(PusherStrategy, InfeasibleForHeavyItem) {
+    auto pushers = generic_pushers();
+    ts::PusherStrategy strategy(pushers);
+    auto task = small_palletize_task();
+    auto& p = std::get<tc::PalletizeParams>(task.params);
+    p.item.mass = 500.0 * si::kilogram; // exceeds every pusher's payload
+    auto result = strategy.evaluate(task);
+    EXPECT_EQ(result.feasibility, ts::Feasibility::INFEASIBLE);
+    EXPECT_FALSE(result.equipment.has_value());
 }

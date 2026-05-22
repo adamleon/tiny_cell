@@ -100,3 +100,56 @@ TEST(ArmCatalog, RejectsMalformedFootprint) {
     })");
     EXPECT_THROW(io::load_arm_catalog(file.path()), io::ParseError);
 }
+
+TEST(PusherCatalog, LoadsRealGenericCatalog) {
+    auto entries = io::load_pusher_catalog(
+        repo_root() / "assets" / "pusher" / "generic" / "catalog.json");
+    EXPECT_EQ(entries.size(), 4U);
+}
+
+TEST(PusherCatalog, FieldsRoundTrip) {
+    auto entries = io::load_pusher_catalog(
+        repo_root() / "assets" / "pusher" / "generic" / "catalog.json");
+    const auto& first = entries.front();
+    EXPECT_EQ(first.id, "pusher_short_light");
+    EXPECT_EQ(first.family, "pneumatic_short");
+    EXPECT_NEAR(first.stroke.numerical_value_in(si::metre), 0.2, 1e-9);
+    EXPECT_NEAR(first.payload_max.numerical_value_in(si::kilogram), 5.0, 1e-9);
+    EXPECT_NEAR(first.cycle_time_per_push.numerical_value_in(si::second), 1.2, 1e-9);
+    EXPECT_NEAR(first.list_price_eur, 3200.0, 1e-9);
+}
+
+TEST(PusherCatalog, RejectsWrongCategory) {
+    TempJsonFile file(R"({"category":"arm","entries":[]})");
+    EXPECT_THROW(io::load_pusher_catalog(file.path()), io::ParseError);
+}
+
+TEST(PusherCatalog, RejectsNegativeStroke) {
+    TempJsonFile file(R"({
+      "category":"pusher",
+      "entries":[{
+        "id":"bad","model_name":"bad","family":"x","controller_class":"small",
+        "footprint_polygon_m":[[-0.1,-0.1],[0.1,-0.1],[0.1,0.1],[-0.1,0.1]],
+        "stroke_m":-0.1,"payload_max_kg":5.0,
+        "cycle_time_per_push_s":1.0,
+        "power_peak_w":500.0,"power_idle_w":50.0,
+        "list_price_eur":1000.0
+      }]
+    })");
+    EXPECT_THROW(io::load_pusher_catalog(file.path()), io::ParseError);
+}
+
+TEST(PusherCatalog, RejectsMissingPayload) {
+    TempJsonFile file(R"({
+      "category":"pusher",
+      "entries":[{
+        "id":"bad","model_name":"bad","family":"x","controller_class":"small",
+        "footprint_polygon_m":[[-0.1,-0.1],[0.1,-0.1],[0.1,0.1],[-0.1,0.1]],
+        "stroke_m":0.5,
+        "cycle_time_per_push_s":1.0,
+        "power_peak_w":500.0,"power_idle_w":50.0,
+        "list_price_eur":1000.0
+      }]
+    })");
+    EXPECT_THROW(io::load_pusher_catalog(file.path()), io::ParseError);
+}

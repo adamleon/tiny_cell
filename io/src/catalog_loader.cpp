@@ -136,6 +136,27 @@ tc::ReachEnvelope read_reach_envelope(const json& j, const std::filesystem::path
     };
 }
 
+// Builds one PusherSpec from one catalog entry JSON object. The pusher
+// schema is intentionally narrower than the arm schema (no reach envelope,
+// no acceleration, no TCO fields yet) — see core/model/pusher.hpp for the
+// rationale.
+tc::PusherSpec parse_pusher_spec(const json& j, const std::filesystem::path& src) {
+    return tc::PusherSpec{
+        .id = read_non_empty_string(j, "id", src),
+        .model_name = read_non_empty_string(j, "model_name", src),
+        .family = read_non_empty_string(j, "family", src),
+        .controller_class = read_non_empty_string(j, "controller_class", src),
+        .footprint = read_footprint_polygon(j, src),
+        .stroke = read_positive_double(j, "stroke_m", src) * si::metre,
+        .payload_max = read_positive_double(j, "payload_max_kg", src) * si::kilogram,
+        .cycle_time_per_push =
+            read_positive_double(j, "cycle_time_per_push_s", src) * si::second,
+        .power_peak = read_positive_double(j, "power_peak_w", src) * si::watt,
+        .power_idle = read_non_negative_double(j, "power_idle_w", src) * si::watt,
+        .list_price_eur = read_positive_double(j, "list_price_eur", src),
+    };
+}
+
 // Builds one ArmSpec from one catalog entry JSON object. Designated-init
 // is used (rather than default-construct + assign) because mp-units quantity
 // types are not default-constructible. The lifetime_years → seconds
@@ -202,6 +223,49 @@ std::vector<core::ArmSpec> load_arm_catalog(const std::filesystem::path& path) {
     for (std::size_t i = 0; i < doc.at("entries").size(); ++i) {
         try {
             out.push_back(parse_arm_spec(doc.at("entries")[i], path));
+        } catch (const ParseError&) {
+            throw;
+        } catch (const json::exception& e) {
+            throw ParseError(path,
+                             "entries[" + std::to_string(i) + "]: " + e.what());
+        }
+    }
+    return out;
+}
+
+// load_pusher_catalog(): same shape as load_arm_catalog above — open, parse,
+// validate the top-level envelope (category="pusher", entries array), then
+// dispatch each entry through parse_pusher_spec. Kept as a parallel function
+// rather than templated dispatch (per-category-loader decision, decisions.md);
+// the two share only the read_* helpers, not control flow.
+std::vector<core::PusherSpec> load_pusher_catalog(const std::filesystem::path& path) {
+    std::ifstream input(path);
+    if (!input.is_open()) {
+        throw ParseError(path, "could not open file");
+    }
+
+    json doc;
+    try {
+        input >> doc;
+    } catch (const json::parse_error& e) {
+        throw ParseError(path, std::string("JSON parse error: ") + e.what());
+    }
+
+    if (!doc.is_object()) {
+        throw ParseError(path, "top-level JSON must be an object");
+    }
+    if (!doc.contains("category") || doc.at("category").get<std::string>() != "pusher") {
+        throw ParseError(path, "expected category=\"pusher\"");
+    }
+    if (!doc.contains("entries") || !doc.at("entries").is_array()) {
+        throw ParseError(path, "missing or non-array field: entries");
+    }
+
+    std::vector<core::PusherSpec> out;
+    out.reserve(doc.at("entries").size());
+    for (std::size_t i = 0; i < doc.at("entries").size(); ++i) {
+        try {
+            out.push_back(parse_pusher_spec(doc.at("entries")[i], path));
         } catch (const ParseError&) {
             throw;
         } catch (const json::exception& e) {

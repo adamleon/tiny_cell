@@ -20,48 +20,106 @@ namespace tc = tinycell::core;
 constexpr double placeholder_pusher_active_duty_fraction = 0.4;
 
 // Equipment-model assumption: a row of boxes accumulates on an in-feed
-// belt against an end stop. When the row is full, the belt stops and the
-// pusher transfers the whole row sideways onto the pallet in one stroke.
-// The pallet belt then advances perpendicular to the push by one box, so
-// the next row has space. One push moves one ROW, not one box.
+// belt against an end stop. When the row is full, the belt stops and
+// the pusher transfers the whole row sideways onto the pallet in one
+// stroke. The pallet belt then advances perpendicular to the push by
+// one box, so the next row has space. One push moves one ROW, not one
+// box.
 //
-//   row direction      = the dimension the pusher pushes across
-//                       = the smaller pallet dimension (cheaper stroke)
+//   row direction      = the dimension boxes line up along (perpendicular
+//                        to push)
+//   push direction     = the dimension the pusher traverses
 //   advance direction  = perpendicular to push; accumulated by belt index
 //
-// Picking the smaller pallet dim as the row direction is optimistic
-// (favours feasibility / cost) and mirrors the half-diagonal optimism of
-// ArmStrategy's reach proxy.
+// The pusher's stroke is sized to traverse the pallet's smaller
+// dimension (taken as the row direction). The dimension of each box
+// along the row direction depends on the box's ALIGNMENT — see
+// alignment-aware layout below.
 
-// boxes_per_row(): how many boxes pack along the row direction in a single
-// push. Grid-pattern assumption only (data-model.md §1 — grid pattern is the
-// step-1 scope). Box is oriented so its smaller floor dimension runs along
-// the row, maximising boxes per row.
-int boxes_per_row(const tc::PalletizeParams& p) {
+// RowLayout captures all per-alignment metrics the catalog selection
+// and cycle-time math need. The fundamental question for a pusher
+// pushing rectangles is "which way is the box oriented when it arrives
+// on the in-feed belt?" — different alignments produce different
+// boxes-per-row, different stroke requirements, different row payloads.
+struct RowLayout {
+    int boxes_per_row;
+    int num_rows;
+    tc::Mass row_payload;
+};
+
+// layout_for_alignment: compute row metrics assuming the item arrives
+// in the given alignment.
+//   * alignment 0 (canonical) = item's `width` along the local frame's
+//                               row direction (X axis by our convention).
+//   * alignment 1             = item rotated 90° from canonical
+//                               (`length` along the row direction).
+// For continuous-symmetry items (cylinder), width and length are equal
+// and alignment is moot — the helper returns the same metrics for any
+// alignment.
+RowLayout layout_for_alignment(const tc::PalletizeParams& p, int alignment) {
+    // Convention: alignment 0 puts the item's declared `width` along
+    // the row direction. alignment 1 swaps it for `length`. Higher
+    // alignment indices (asymmetric items at non-cardinal grids) reduce
+    // to one of these two by symmetry in MVP — extend when a strategy
+    // actually exercises more than two cardinal alignments.
+    const auto along_row = (alignment == 0)
+        ? p.item.physical.width
+        : p.item.physical.length;
+
     const auto row_dim_m =
-        std::min(p.pallet.physical.width, p.pallet.physical.length).numerical_value_in(si::metre);
-    const auto box_side_along_row_m =
-        std::min(p.item.physical.width, p.item.physical.length).numerical_value_in(si::metre);
-    return static_cast<int>(std::floor(row_dim_m / box_side_along_row_m));
+        std::min(p.pallet.physical.width, p.pallet.physical.length)
+            .numerical_value_in(si::metre);
+    const auto along_row_m = along_row.numerical_value_in(si::metre);
+
+    RowLayout layout;
+    layout.boxes_per_row =
+        static_cast<int>(std::floor(row_dim_m / along_row_m));
+    if (layout.boxes_per_row <= 0) {
+        layout.num_rows = 0;
+        layout.row_payload = 0.0 * si::kilogram;
+        return layout;
+    }
+    layout.num_rows = (p.box_count + layout.boxes_per_row - 1) / layout.boxes_per_row;
+    layout.row_payload =
+        p.item.physical.mass * static_cast<double>(layout.boxes_per_row);
+    return layout;
+}
+
+// pick_required_alignment: enumerate the alignments the item could
+// arrive in and pick the favourable one (more boxes per row → fewer
+// total push cycles). For continuous-symmetry items, the alignment is
+// moot — return 0 unconditionally; the predicate's continuous-symmetry
+// short-circuit makes the choice irrelevant downstream. For square-
+// symmetric items the two layout computations produce identical
+// results; we still return 0 to keep the canonical convention.
+//
+// PLACEHOLDER (step 4): "favourable" is currently more-boxes-per-row.
+// A real cost model would weigh row-count against stroke distance,
+// energy per push, and row payload against catalog availability.
+int pick_required_alignment(const tc::PalletizeParams& p) {
+    const auto a0 = layout_for_alignment(p, 0);
+    const auto a1 = layout_for_alignment(p, 1);
+    return (a1.boxes_per_row > a0.boxes_per_row) ? 1 : 0;
 }
 
 // select_pusher():
 //   1. for each pusher in the catalog
-//   2.   reject if payload_max < item.mass × boxes_per_row
-//        (the stroke moves a full row at once — all of those box masses
-//        ride on the pusher face simultaneously)
-//   3.   reject if stroke < row_dim
-//        (the pusher must traverse one pallet row in a single extension)
+//   2.   reject if payload_max < row_payload (the stroke moves a full
+//        row at once — all of those box masses ride on the pusher face
+//        simultaneously)
+//   3.   reject if stroke < required_stroke (the pusher must traverse
+//        one pallet row in a single extension)
 //   4. among remaining pushers, return the one with the lowest list_price_eur
 // Returns nullptr if no pusher satisfies both filters.
-const tc::PusherSpec* select_pusher(const tc::PalletizeParams& p, int boxes_in_row,
+const tc::PusherSpec* select_pusher(const tc::PalletizeParams& p,
+                                    const RowLayout& layout,
                                     std::span<const tc::PusherSpec> catalog) {
-    const auto required_stroke = std::min(p.pallet.physical.width, p.pallet.physical.length);
-    const auto row_payload = p.item.physical.mass * static_cast<double>(boxes_in_row);
+    const auto required_stroke =
+        std::min(p.pallet.physical.width, p.pallet.physical.length);
 
     const tc::PusherSpec* best = nullptr;
     for (const auto& pusher : catalog) {
-        if (pusher.payload_max < row_payload) {
+        if (pusher.payload_max < layout.row_payload) {
             continue;
         }
         if (pusher.stroke < required_stroke) {
@@ -74,50 +132,54 @@ const tc::PusherSpec* select_pusher(const tc::PalletizeParams& p, int boxes_in_r
     return best;
 }
 
-// Knowledge-flow contract for PusherStrategy on a Palletize task:
-//   * requires_knowledge — items must be on a feeder belt with their pose
-//     known, AND their orientation resolved enough that the width
-//     presented to the pusher face is consistent across all items in a
-//     row. The equipment model is "items accumulate on a belt against an
-//     end stop until a row is queued, then one stroke transfers the
-//     whole row" — width-consistency is what makes the stroke geometry
-//     work; carrier=BELT and pose-known are how the in-feed aligns.
+// State-flow contract for PusherStrategy on a Palletize task:
+//   * requires_state — items must be on a feeder belt with their pose
+//     known, AND physically held at the specific alignment the row math
+//     was sized for. Pushers read the CONTROL axis of orientation
+//     (not Knowledge): the pusher's stroke is open-loop, so a camera-
+//     only observation isn't sufficient — the item could rotate on the
+//     belt between observation and contact. Production cells achieve
+//     this with side-guides / pre-fixturing that physically pin the
+//     alignment.
 //
-//     Width-consistency = `core::orientation_resolved(item.symmetry, k)`.
-//     For a cylinder (continuous symmetry), width is always the diameter
-//     → trivially satisfied. For a square (4-fold symmetry), width is
-//     constant in all cardinal orientations → satisfied if we know we're
-//     snapped to a cardinal. For a rectangle (2-fold symmetry), width
-//     differs between long-axis-perpendicular and long-axis-parallel
-//     orientations → need knowledge that resolves to ONE of those two
-//     classes (e.g. camera reading at `orientation::snapped(180)`).
+//     Required alignment is whichever class `pick_required_alignment`
+//     selected based on the row math. For a rectangle (Discrete(180))
+//     this picks the alignment that maximises boxes-per-row. For
+//     cylinder/square the choice collapses (one effective alignment).
 //
 //   * effect — after palletizing, the item rests on the pallet with
-//     position known and orientation exact (the stroke places it
+//     position known AND knowledge+control both pinned to the
+//     canonical alignment 0 (the pusher's stroke places it
 //     deterministically against the pallet's row grid).
 //
 // "Item is pushable" / shape-regularity guards are STATIC item
-// properties, not knowledge predicates (data-model.md §2.1) — they live
-// as INFEASIBLE branches inside evaluate (currently the
-// `boxes_per_row == 0` short-circuit). A `pushable` flag on BoxSpec
-// would let pushable-INFEASIBLE be reported pre-catalog like the
-// pattern guard, but BoxSpec carries no such flag yet.
+// properties, not state predicates (data-model.md §2.1) — they live as
+// INFEASIBLE branches inside evaluate (currently the `boxes_per_row
+// == 0` short-circuit on the chosen alignment). A `pushable` flag on
+// BoxSpec would let pushable-INFEASIBLE be reported pre-catalog like
+// the pattern guard, but BoxSpec carries no such flag yet.
 // PLACEHOLDER (step 4): add `pushable: bool` to BoxSpec and short-
 // circuit non-pushable items here before catalog lookup.
-RequiresKnowledgeFn pusher_requires_knowledge(tc::RotationalSymmetry item_symmetry) {
-    return [item_symmetry](const tc::ItemKnowledge& k) {
-        return k.position_known &&
-               k.on_carrier == tc::OnCarrier::Belt &&
-               core::orientation_resolved(item_symmetry, k.orientation);
+RequiresStateFn pusher_requires_state(tc::RotationalSymmetry item_symmetry,
+                                      int required_alignment) {
+    return [item_symmetry, required_alignment](const tc::ItemState& s) {
+        if (!s.position_known) return false;
+        if (s.on_carrier != tc::OnCarrier::Belt) return false;
+        return core::control_matches_alignment(
+            item_symmetry, s.orientation.control, required_alignment);
     };
 }
 
 EffectFn pusher_palletize_effect() {
-    return [](const tc::ItemKnowledge& k) {
-        tc::ItemKnowledge next = k;
+    return [](const tc::ItemState& s) {
+        tc::ItemState next = s;
         next.position_known = true;
         next.on_carrier = tc::OnCarrier::Pallet;
-        next.orientation = tc::orientation::exact();
+        // Pusher-placed: item is BOTH observed (Knowledge) and
+        // physically held (Control) at the canonical alignment 0 by
+        // the pallet's row grid.
+        next.orientation.knowledge = tc::knowledge::known(0);
+        next.orientation.control = tc::control::constrained(0);
         return next;
     };
 }
@@ -129,44 +191,54 @@ PusherStrategy::PusherStrategy(std::span<const tc::PusherSpec> catalog) : catalo
 std::string_view PusherStrategy::name() const { return "PusherStrategy"; }
 
 // applies_to(): the pusher covers any task kind the strategy class is
-// willing to solve. Today that's Palletize only; PushOff and short-distance
-// Transport are the obvious additions when those task kinds come online.
+// willing to solve. Today that's Palletize only; PushOff and short-
+// distance Transport are the obvious additions when those task kinds
+// come online.
 bool PusherStrategy::applies_to(const tc::Task& task) const {
     return task.kind() == tc::TaskKind::Palletize;
 }
 
 // evaluate(): produces a candidate proposal for the given task.
 //   1. precondition check — task must be one we apply to
-//   2. compute boxes_per_row; if zero (box too wide for the pallet row),
-//      no pusher can serve it — INFEASIBLE before catalog lookup
-//   3. pick the cheapest pusher whose stroke covers one row and whose
+//   2. pick the required alignment (which class the row math wants);
+//      compute the row layout for that alignment
+//   3. if boxes_per_row is 0 (box too wide for the pallet row at the
+//      chosen alignment), no pusher can serve it — INFEASIBLE before
+//      catalog lookup
+//   4. pick the cheapest pusher whose stroke covers one row and whose
 //      payload covers the row's combined mass
-//   4. if none is feasible, return INFEASIBLE with zero metrics
-//   5. otherwise compute cycle_time (one push per row) and energy_per_cycle,
-//      return FULL with the chosen pusher as candidate
+//   5. if none is feasible, return INFEASIBLE with zero metrics
+//   6. otherwise compute cycle_time (one push per row) and
+//      energy_per_cycle, return FULL with the chosen pusher as
+//      candidate; the emitted predicate captures the required alignment
+//      so the propagator gates on it.
 StrategyResult PusherStrategy::evaluate(const tc::Task& task) const {
     if (!applies_to(task)) {
         throw std::logic_error("PusherStrategy::evaluate called on inapplicable task");
     }
     const auto& p = std::get<tc::PalletizeParams>(task.params);
 
-    const int per_row = boxes_per_row(p);
-    if (per_row <= 0) {
-        // Box too wide for even one to fit in a pallet row — no pusher
-        // configuration can serve this task. Equivalent to an INFEASIBLE
-        // pattern guard (data-model.md §2.1) and reported the same way.
+    const int required_alignment = pick_required_alignment(p);
+    const auto layout = layout_for_alignment(p, required_alignment);
+
+    if (layout.boxes_per_row <= 0) {
+        // Box too wide for even one to fit in a pallet row at the
+        // chosen alignment — no pusher configuration can serve this
+        // task. Equivalent to an INFEASIBLE pattern guard
+        // (data-model.md §2.1) and reported the same way.
         return StrategyResult{
             .feasibility = Feasibility::INFEASIBLE,
             .strategy_name = std::string{name()},
             .equipment = std::nullopt,
             .energy_per_cycle = 0.0 * si::joule,
             .cycle_time = 0.0 * si::second,
-            .requires_knowledge = pusher_requires_knowledge(p.item.physical.symmetry),
+            .requires_state = pusher_requires_state(
+                p.item.physical.symmetry, required_alignment),
             .effect = pusher_palletize_effect(),
         };
     }
 
-    const auto* pusher = select_pusher(p, per_row, catalog_);
+    const auto* pusher = select_pusher(p, layout, catalog_);
     if (pusher == nullptr) {
         return StrategyResult{
             .feasibility = Feasibility::INFEASIBLE,
@@ -174,17 +246,18 @@ StrategyResult PusherStrategy::evaluate(const tc::Task& task) const {
             .equipment = std::nullopt,
             .energy_per_cycle = 0.0 * si::joule,
             .cycle_time = 0.0 * si::second,
-            .requires_knowledge = pusher_requires_knowledge(p.item.physical.symmetry),
+            .requires_state = pusher_requires_state(
+                p.item.physical.symmetry, required_alignment),
             .effect = pusher_palletize_effect(),
         };
     }
 
     // PLACEHOLDER (step 4): cycle_time = cycle_time_per_push × num_rows
     // counts only push events; in-feed accumulation between pushes is
-    // assumed to overlap perfectly. Real throughput model in step 4 will
-    // couple in-feed rate, pusher cycle, and pallet advance.
-    const int num_rows = (p.box_count + per_row - 1) / per_row;
-    const auto cycle_time = pusher->cycle_time_per_push * static_cast<double>(num_rows);
+    // assumed to overlap perfectly. Real throughput model in step 4
+    // will couple in-feed rate, pusher cycle, and pallet advance.
+    const auto cycle_time =
+        pusher->cycle_time_per_push * static_cast<double>(layout.num_rows);
     const auto active_seconds = cycle_time.numerical_value_in(si::second)
                                 * placeholder_pusher_active_duty_fraction;
     const auto idle_seconds = cycle_time.numerical_value_in(si::second) - active_seconds;
@@ -198,7 +271,8 @@ StrategyResult PusherStrategy::evaluate(const tc::Task& task) const {
         .equipment = EquipmentRef{.catalog_id = pusher->id},
         .energy_per_cycle = energy_j * si::joule,
         .cycle_time = cycle_time,
-        .requires_knowledge = pusher_requires_knowledge(p.item.physical.symmetry),
+        .requires_state = pusher_requires_state(
+            p.item.physical.symmetry, required_alignment),
         .effect = pusher_palletize_effect(),
     };
 }

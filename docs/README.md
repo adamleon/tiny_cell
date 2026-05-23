@@ -49,17 +49,21 @@ MVP is a *subset and sequence* of this design, not a separate design. There is n
 
 **Guard** — A pass/fail predicate inside a strategy that *nothing can fix* (e.g. "item geometry fits pallet pattern"). On failure → return INFEASIBLE immediately, spawn nothing.
 
-**Precondition** — A *solvable* sub-goal a strategy emits, itself a Task (e.g. "item must be gripped"). On need → spawn a child Task and recurse. **Structural** preconditions always spawn equipment; **knowledge** preconditions spawn recovery only if propagated ItemKnowledge doesn't already satisfy them.
+**Precondition** — A *solvable* sub-goal a strategy emits, itself a Task (e.g. "item must be gripped"). On need → spawn a child Task and recurse. **Structural** preconditions always spawn equipment; **state** preconditions spawn recovery only if propagated ItemState doesn't already satisfy them.
 
 **Candidate binding** — A strategy proposes a *specific* real equipment model (to compute reach/energy/feasibility) but as a *candidate*, not a commitment. Deciding to share one physical instance across tasks is the allocation layer's job, not the strategy's — committing inside the strategy would destroy cross-station sharing.
 
 **ItemPhysical** — Static physical-spec fields every item type carries (dimensions, mass, symmetry; future surface / rigidity / chirality). Lives on each item type's spec by composition (`BoxSpec { ItemPhysical physical; }`). New shared properties land here once; new type-specific fields live on the wrapper.
 
-**ItemKnowledge** — A small, fixed, forward-propagated set of *planner-tracked facts* about an item flowing through the workflow (`position_known`, `orientation`, `on_carrier`). Strategy `effect`s mutate it; strategy `requires_knowledge` predicates check it. Name reflects honest content: it's the planner's belief about pose precision + the carrier it's tracking, not the item's physical state.
+**ItemState** — A small, fixed, forward-propagated bundle of planner-tracked facts about an item flowing through the workflow (`position_known`, `orientation { knowledge, control }`, `on_carrier`). Strategy `effect`s mutate it; strategy `requires_state` predicates check it. Bundles both planner *beliefs* (Knowledge axis on orientation, pose-precision flags) and planner-tracked *physical facts* (carrier, Control axis on orientation).
 
 **RotationalSymmetry** — Static property on `ItemPhysical`. Variant of `Continuous | Discrete{period_deg} | Asymmetric`. `period_deg` is the smallest rotation that maps the item to itself (rectangle 180; square 90; triangle 120; hexagon 60). Rotation only — reflections / chirality aren't modelled for MVP.
 
-**OrientationKnowledge** — Dynamic field on `ItemKnowledge`. Variant of `Unknown | Snapped{step_deg} | Exact`. Strategies don't switch on this directly — they call `orientation_resolved(symmetry, knowledge)` (the property-based seam, `decisions.md`).
+**Alignment** — A symmetry-equivalence class of orientations. A rectangle has 2 alignments at the 90° cardinal grid (long-along-X / long-along-Y); a square has 1; a cylinder has 1 (trivially); an asymmetric block has 4. Computed via `distinct_alignments(symmetry)`. Strategies pin alignment by index, not by angle.
+
+**OrientationKnowledge** — Planner belief axis on `ItemState.orientation`. Variant of `Unknown | Known{alignment}`. Updated by passive observations (camera). Read by arm-style strategies.
+
+**OrientationControl** — Physical constraint axis on `ItemState.orientation`. Variant of `Free | Constrained{alignment}`. Updated by mechanical actions (fixture, side-guides). Read by pusher-style strategies whose open-loop strokes need physical hold, not just observation.
 
 **Sharing (two levels)** — *Strategy-class reuse*: one strategy applies to multiple task types. *Instance reuse*: one physical unit serves multiple tasks via candidate binding (e.g. an underutilized arm covering an adjacent station's transport task).
 

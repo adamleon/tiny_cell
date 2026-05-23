@@ -57,34 +57,43 @@ const tc::ArmSpec* select_arm(const tc::PalletizeParams& p,
     return best;
 }
 
-// Knowledge-flow contract for ArmStrategy on a Palletize task:
-//   * requires_knowledge — the arm needs to know where to grasp the item
-//     AND it needs to know the item's orientation to within its symmetry
-//     (so the grasp lines up with the box's grippable face). Carrier-
-//     agnostic: an arm doesn't care whether the item is on a belt, a
-//     fixture, or free — this carrier-flexibility is what distinguishes
-//     an arm from a pusher in the OR-tree.
-//   * effect — after palletizing, the item rests on the pallet with its
-//     pose known to an exact value (the arm placed it deliberately at
-//     the pattern position).
+// State-flow contract for ArmStrategy on a Palletize task:
+//   * requires_state — the arm needs to know where to grasp the item AND
+//     needs to know its orientation alignment. Arms read the KNOWLEDGE
+//     axis of orientation (planner belief is enough — the arm plans its
+//     motion from the belief and its end-effector compliance absorbs
+//     minor drift between observation and grasp). ANY alignment is OK
+//     as long as the arm knows which one; it parameterises the grasp
+//     by what's known. Carrier-agnostic: an arm doesn't care whether
+//     the item is on a belt, a fixture, or free — this carrier-
+//     flexibility is what distinguishes an arm from a pusher in the
+//     OR-tree.
+//   * effect — after palletizing, the item rests on the pallet with
+//     pose known AND physically held at the canonical alignment 0 (the
+//     arm placed it deliberately at the pattern position; both belief
+//     and physical control collapse to that alignment).
 //
-// Orientation is gated via `core::orientation_resolved`, which composes
-// the item's symmetry and the current knowledge — strategies do not
-// switch on item type (decisions.md "Item properties drive strategy
-// gating, not item type").
-RequiresKnowledgeFn arm_requires_knowledge(tc::RotationalSymmetry item_symmetry) {
-    return [item_symmetry](const tc::ItemKnowledge& k) {
-        return k.position_known &&
-               core::orientation_resolved(item_symmetry, k.orientation);
+// Orientation is gated via `core::orientation_known`, which composes the
+// item's symmetry and the current knowledge — strategies do not switch
+// on item type (decisions.md "Item properties drive strategy gating,
+// not item type").
+RequiresStateFn arm_requires_state(tc::RotationalSymmetry item_symmetry) {
+    return [item_symmetry](const tc::ItemState& s) {
+        return s.position_known &&
+               core::orientation_known(item_symmetry, s.orientation.knowledge);
     };
 }
 
 EffectFn arm_palletize_effect() {
-    return [](const tc::ItemKnowledge& k) {
-        tc::ItemKnowledge next = k;
+    return [](const tc::ItemState& s) {
+        tc::ItemState next = s;
         next.position_known = true;
         next.on_carrier = tc::OnCarrier::Pallet;
-        next.orientation = tc::orientation::exact();
+        // Arm-placed: item is BOTH observed (Knowledge) and physically
+        // held (Control) at the canonical alignment 0 by the pallet's
+        // grid pattern.
+        next.orientation.knowledge = tc::knowledge::known(0);
+        next.orientation.control = tc::control::constrained(0);
         return next;
     };
 }
@@ -108,7 +117,7 @@ bool ArmStrategy::applies_to(const tc::Task& task) const {
 //   1. precondition check — task must be one we apply to
 //   2. for a Palletize task, pick the cheapest feasible arm via select_arm
 //   3. if no arm is feasible, return INFEASIBLE with zero metrics (still
-//      carrying the knowledge-flow contract — see arm_requires_knowledge /
+//      carrying the state-flow contract — see arm_requires_state /
 //      arm_palletize_effect above)
 //   4. otherwise compute placeholder cycle_time and energy_per_cycle and
 //      return FULL with the chosen arm as candidate equipment
@@ -126,7 +135,7 @@ StrategyResult ArmStrategy::evaluate(const tc::Task& task) const {
             .equipment = std::nullopt,
             .energy_per_cycle = 0.0 * si::joule,
             .cycle_time = 0.0 * si::second,
-            .requires_knowledge = arm_requires_knowledge(p.item.physical.symmetry),
+            .requires_state = arm_requires_state(p.item.physical.symmetry),
             .effect = arm_palletize_effect(),
         };
     }
@@ -148,7 +157,7 @@ StrategyResult ArmStrategy::evaluate(const tc::Task& task) const {
         .equipment = EquipmentRef{.catalog_id = arm->id},
         .energy_per_cycle = energy_j * si::joule,
         .cycle_time = cycle_time,
-        .requires_knowledge = arm_requires_knowledge(p.item.physical.symmetry),
+        .requires_state = arm_requires_state(p.item.physical.symmetry),
         .effect = arm_palletize_effect(),
     };
 }

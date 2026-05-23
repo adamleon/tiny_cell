@@ -37,37 +37,41 @@ struct EquipmentRef {
     std::string catalog_id;
 };
 
-// State-flow primitive: `requires_state` + `effect` are the load-bearing
-// pair every state-aware solver consumer reads (data-model.md §4). A
-// live solver threads state INLINE through its per-task loop — at each
-// task, filter applicable strategies by `requires_state(state)` against
-// the running state, pick a winner, then `state = winner.effect(state)`
-// to produce the input for the next task. State is *input to selection*,
-// not something validated after a whole candidate is built. The batch
-// walker `propagate_state` (state_propagation.hpp) is a separate,
-// validator-only consumer of these same two fields — used for finished
-// candidates that didn't thread state, demo, and tests. See decisions.md
-// "State-flow primitive … is load-bearing; the batch walker … is a
-// validator-only role."
+// Knowledge-flow primitive: `requires_knowledge` + `effect` are the
+// load-bearing pair every knowledge-aware solver consumer reads
+// (data-model.md §4). A live solver threads knowledge INLINE through its
+// per-task loop — at each task, filter applicable strategies by
+// `requires_knowledge(k)` against the running knowledge, pick a winner,
+// then `k = winner.effect(k)` to produce the input for the next task.
+// Knowledge is *input to selection*, not something validated after a
+// whole candidate is built. The batch walker `propagate_knowledge`
+// (knowledge_propagation.hpp) is a separate, validator-only consumer of
+// these same two fields — used for finished candidates that didn't
+// thread knowledge, plus demo and tests. See decisions.md "State-flow
+// primitive … is load-bearing; the batch walker … is a validator-only
+// role." (The decisions.md entry still uses the old "state-flow" name;
+// it's the same primitive, renamed for honesty about what it tracks.)
 
-// RequiresStateFn — predicate over the inbound ItemState at the node
-// where this strategy sits. Pure; no captured mutable state. Returning
-// false means the strategy cannot run with the item in that state.
-using RequiresStateFn = std::function<bool(const core::ItemState&)>;
+// RequiresKnowledgeFn — predicate over the inbound ItemKnowledge at the
+// node where this strategy sits. Pure; no captured mutable state.
+// Returning false means the strategy cannot run with the item in that
+// knowledge state.
+using RequiresKnowledgeFn = std::function<bool(const core::ItemKnowledge&)>;
 
-// EffectFn — ItemState → ItemState applied AFTER the task to produce the
-// state the next task observes. Pure; no captured mutable state.
-using EffectFn = std::function<core::ItemState(const core::ItemState&)>;
+// EffectFn — ItemKnowledge → ItemKnowledge applied AFTER the task to
+// produce the knowledge state the next task observes. Pure; no captured
+// mutable state.
+using EffectFn = std::function<core::ItemKnowledge(const core::ItemKnowledge&)>;
 
 // StrategyResult — the output of one Strategy::evaluate() call.
 //
-// Strategies SHOULD always populate `requires_state` and `effect`, even
-// on INFEASIBLE returns — they describe the strategy's state-flow
-// contract, which is conceptually independent of whether a particular
-// catalog selection succeeded. Empty std::function on a consumed result
-// is a defect in the caller's selection logic, not a state-flow failure,
-// and consumers (e.g. propagate_state) reject it rather than fabricate
-// identity behaviour (engineering.md §3).
+// Strategies SHOULD always populate `requires_knowledge` and `effect`,
+// even on INFEASIBLE returns — they describe the strategy's knowledge-
+// flow contract, which is conceptually independent of whether a
+// particular catalog selection succeeded. Empty std::function on a
+// consumed result is a defect in the caller's selection logic, not a
+// knowledge-flow failure, and consumers (e.g. propagate_knowledge)
+// reject it rather than fabricate identity behaviour (engineering.md §3).
 //
 // PLACEHOLDER (step 4): partial_info + preconditions are absent — they
 // turn on with the analytic throughput model (decisions.md).
@@ -77,7 +81,7 @@ struct StrategyResult {
     std::optional<EquipmentRef> equipment;
     core::Energy energy_per_cycle;
     core::Duration cycle_time;
-    RequiresStateFn requires_state;
+    RequiresKnowledgeFn requires_knowledge;
     EffectFn effect;
 };
 

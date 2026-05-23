@@ -1,18 +1,22 @@
 #pragma once
 
-// BoxSpec — physical description of a single item (a "box") that flows through
-// the cell. Pure value type, no behavior. Used as a task parameter today;
-// later it will also describe items the sources spawn and the sinks consume.
+// BoxSpec — description of a box ITEM TYPE (a "box" being one of the items
+// that flows through the cell). Composes ItemPhysical so the box gets the
+// same physical-property shape every item type carries (width, length,
+// height, mass, symmetry). BoxSpec stays a distinct type so PalletizeParams
+// can express "the BoxSpec being placed" vs "the PalletSpec receiving it"
+// without accidentally swapping the roles at call sites.
+//
+// Box-specific fields will accrue here over time (label class, surface
+// texture, allowed grip strategies, …). For now BoxSpec is the bare
+// ItemPhysical composition; the named type carries the role.
 
-#include <tinycell/units.hpp>
+#include <tinycell/model/item.hpp>
 
 namespace tinycell::core {
 
 struct BoxSpec {
-    Length width;
-    Length length;
-    Length height;
-    Mass mass;
+    ItemPhysical physical;
 };
 
 } // namespace tinycell::core

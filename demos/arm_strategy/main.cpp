@@ -36,11 +36,24 @@ int main() {
         .id = "demo_palletize",
         .params = tc::PalletizeParams{
             .item_id = "box_400x300x200",
-            .item = {.width = 0.3 * si::metre,
-                     .length = 0.4 * si::metre,
-                     .height = 0.2 * si::metre,
-                     .mass = 5.0 * si::kilogram},
-            .pallet = {.width = 1.2 * si::metre, .length = 0.8 * si::metre},
+            .item = tc::BoxSpec{
+                .physical = tc::ItemPhysical{
+                    .width = 0.3 * si::metre,
+                    .length = 0.4 * si::metre,
+                    .height = 0.2 * si::metre,
+                    .mass = 5.0 * si::kilogram,
+                    .symmetry = tc::symmetry::discrete(180),
+                },
+            },
+            .pallet = tc::PalletSpec{
+                .physical = tc::ItemPhysical{
+                    .width = 1.2 * si::metre,
+                    .length = 0.8 * si::metre,
+                    .height = 0.15 * si::metre,
+                    .mass = 25.0 * si::kilogram,
+                    .symmetry = tc::symmetry::discrete(180),
+                },
+            },
             .box_count = 24,
         },
     };

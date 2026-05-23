@@ -14,7 +14,7 @@ The solution need not be globally optimal — approximately optimal is acceptabl
 |---|---|---|
 | `README.md` | This file: glossary, map | — |
 | `architecture.md` | System-level module breakdown, boundaries, data flow, frames, geometry/units, ECS | Written |
-| `data-model.md` | All type/schema contracts (Task, Strategy, ItemState, catalog, footprint cache, output) | Written |
+| `data-model.md` | All type/schema contracts (Task, Strategy, ItemPhysical, ItemKnowledge, catalog, footprint cache, output) | Written |
 | `solver.md` | The solver algorithm: three layers + LNS optimizer + positional prior + geometry flattening & caching | Written |
 | `interaction.md` | Graded interactive editing ; maps onto footprint cache levels | Written |
 | `standards.md` | Compliance standards + rules-file schema | **STUB — needs your input** |
@@ -49,13 +49,17 @@ MVP is a *subset and sequence* of this design, not a separate design. There is n
 
 **Guard** — A pass/fail predicate inside a strategy that *nothing can fix* (e.g. "item geometry fits pallet pattern"). On failure → return INFEASIBLE immediately, spawn nothing.
 
-**Precondition** — A *solvable* sub-goal a strategy emits, itself a Task (e.g. "item must be gripped"). On need → spawn a child Task and recurse. **Structural** preconditions always spawn equipment; **state** preconditions spawn recovery only if propagated ItemState doesn't already satisfy them.
+**Precondition** — A *solvable* sub-goal a strategy emits, itself a Task (e.g. "item must be gripped"). On need → spawn a child Task and recurse. **Structural** preconditions always spawn equipment; **knowledge** preconditions spawn recovery only if propagated ItemKnowledge doesn't already satisfy them.
 
 **Candidate binding** — A strategy proposes a *specific* real equipment model (to compute reach/energy/feasibility) but as a *candidate*, not a commitment. Deciding to share one physical instance across tasks is the allocation layer's job, not the strategy's — committing inside the strategy would destroy cross-station sharing.
 
-**ItemState** — A small, fixed, forward-propagated vector of facts about an item (position_known, orientation_resolved_to, on_carrier, …) that equipment `effect`s mutate as the item flows through the workflow. A strategy's `requires_state` is checked against the state *as it is at that node*.
+**ItemPhysical** — Static physical-spec fields every item type carries (dimensions, mass, symmetry; future surface / rigidity / chirality). Lives on each item type's spec by composition (`BoxSpec { ItemPhysical physical; }`). New shared properties land here once; new type-specific fields live on the wrapper.
 
-**ItemSymmetry** — Describes how much orientation must be known: z_rotation ∈ {CONTINUOUS, DISCRETE(n), NONE} + flippable. A task's orientation requirement is satisfied when what it needs resolved ⊇ what symmetry already collapses (a bottle needs no rotation known; a square box only mod 90°).
+**ItemKnowledge** — A small, fixed, forward-propagated set of *planner-tracked facts* about an item flowing through the workflow (`position_known`, `orientation`, `on_carrier`). Strategy `effect`s mutate it; strategy `requires_knowledge` predicates check it. Name reflects honest content: it's the planner's belief about pose precision + the carrier it's tracking, not the item's physical state.
+
+**RotationalSymmetry** — Static property on `ItemPhysical`. Variant of `Continuous | Discrete{period_deg} | Asymmetric`. `period_deg` is the smallest rotation that maps the item to itself (rectangle 180; square 90; triangle 120; hexagon 60). Rotation only — reflections / chirality aren't modelled for MVP.
+
+**OrientationKnowledge** — Dynamic field on `ItemKnowledge`. Variant of `Unknown | Snapped{step_deg} | Exact`. Strategies don't switch on this directly — they call `orientation_resolved(symmetry, knowledge)` (the property-based seam, `decisions.md`).
 
 **Sharing (two levels)** — *Strategy-class reuse*: one strategy applies to multiple task types. *Instance reuse*: one physical unit serves multiple tasks via candidate binding (e.g. an underutilized arm covering an adjacent station's transport task).
 

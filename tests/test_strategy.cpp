@@ -31,11 +31,24 @@ tc::Task small_palletize_task() {
         .id = "task_palletize_small",
         .params = tc::PalletizeParams{
             .item_id = "box_a",
-            .item = tc::BoxSpec{.width = 0.3 * si::metre,
-                                .length = 0.4 * si::metre,
-                                .height = 0.2 * si::metre,
-                                .mass = 5.0 * si::kilogram},
-            .pallet = tc::PalletSpec{.width = 1.2 * si::metre, .length = 0.8 * si::metre},
+            .item = tc::BoxSpec{
+                .physical = tc::ItemPhysical{
+                    .width = 0.3 * si::metre,
+                    .length = 0.4 * si::metre,
+                    .height = 0.2 * si::metre,
+                    .mass = 5.0 * si::kilogram,
+                    .symmetry = tc::symmetry::discrete(180),
+                },
+            },
+            .pallet = tc::PalletSpec{
+                .physical = tc::ItemPhysical{
+                    .width = 1.2 * si::metre,
+                    .length = 0.8 * si::metre,
+                    .height = 0.15 * si::metre,
+                    .mass = 25.0 * si::kilogram,
+                    .symmetry = tc::symmetry::discrete(180),
+                },
+            },
             .box_count = 24,
         },
     };
@@ -81,7 +94,7 @@ TEST(ArmStrategy, InfeasibleWhenPayloadExceedsAllArms) {
     auto arms = kuka_arms();
     ts::ArmStrategy strategy(arms);
     auto task = small_palletize_task();
-    std::get<tc::PalletizeParams>(task.params).item.mass = 500.0 * si::kilogram;
+    std::get<tc::PalletizeParams>(task.params).item.physical.mass = 500.0 * si::kilogram;
     auto result = strategy.evaluate(task);
     EXPECT_EQ(result.feasibility, ts::Feasibility::INFEASIBLE);
     EXPECT_FALSE(result.equipment.has_value());
@@ -92,8 +105,8 @@ TEST(ArmStrategy, PicksLargerArmForLargePallet) {
     ts::ArmStrategy strategy(arms);
     auto task = small_palletize_task();
     auto& p = std::get<tc::PalletizeParams>(task.params);
-    p.pallet.width = 2.0 * si::metre;
-    p.pallet.length = 2.0 * si::metre;
+    p.pallet.physical.width = 2.0 * si::metre;
+    p.pallet.physical.length = 2.0 * si::metre;
     auto result = strategy.evaluate(task);
     EXPECT_EQ(result.feasibility, ts::Feasibility::FULL);
     ASSERT_TRUE(result.equipment.has_value());
@@ -135,8 +148,8 @@ TEST(PusherStrategy, PicksCheapestFeasibleForShortPallet) {
     // 0.4 x 0.3 m pallet → row dim = 0.3 m, boxes_per_row = 1, row payload
     // = 5 kg. pusher_mid_medium (0.5 m stroke, 15 kg payload, EUR 5500) is
     // the cheapest passing both; pusher_short_light (0.2 m stroke) fails.
-    p.pallet.width = 0.4 * si::metre;
-    p.pallet.length = 0.3 * si::metre;
+    p.pallet.physical.width = 0.4 * si::metre;
+    p.pallet.physical.length = 0.3 * si::metre;
     auto result = strategy.evaluate(task);
     EXPECT_EQ(result.feasibility, ts::Feasibility::FULL);
     ASSERT_TRUE(result.equipment.has_value());
@@ -160,8 +173,8 @@ TEST(PusherStrategy, InfeasibleForLargePallet) {
     auto task = small_palletize_task();
     auto& p = std::get<tc::PalletizeParams>(task.params);
     // 2 m pallet > largest stroke (1.5 m).
-    p.pallet.width = 2.0 * si::metre;
-    p.pallet.length = 2.0 * si::metre;
+    p.pallet.physical.width = 2.0 * si::metre;
+    p.pallet.physical.length = 2.0 * si::metre;
     auto result = strategy.evaluate(task);
     EXPECT_EQ(result.feasibility, ts::Feasibility::INFEASIBLE);
     EXPECT_FALSE(result.equipment.has_value());
@@ -172,7 +185,7 @@ TEST(PusherStrategy, InfeasibleForHeavyItem) {
     ts::PusherStrategy strategy(pushers);
     auto task = small_palletize_task();
     auto& p = std::get<tc::PalletizeParams>(task.params);
-    p.item.mass = 500.0 * si::kilogram; // a single box exceeds every payload
+    p.item.physical.mass = 500.0 * si::kilogram; // a single box exceeds every payload
     auto result = strategy.evaluate(task);
     EXPECT_EQ(result.feasibility, ts::Feasibility::INFEASIBLE);
     EXPECT_FALSE(result.equipment.has_value());
@@ -187,7 +200,7 @@ TEST(PusherStrategy, InfeasibleWhenRowPayloadExceedsAllPushers) {
     // 1.2 x 0.8 m → row dim = 0.8 m, box 0.3 x 0.4 m → boxes_per_row = 2,
     // row payload = 70 kg. Heaviest pusher in catalog is 60 kg → infeasible
     // even though no single box exceeds payload.
-    p.item.mass = 35.0 * si::kilogram;
+    p.item.physical.mass = 35.0 * si::kilogram;
     auto result = strategy.evaluate(task);
     EXPECT_EQ(result.feasibility, ts::Feasibility::INFEASIBLE);
 }
@@ -199,10 +212,10 @@ TEST(PusherStrategy, InfeasibleWhenBoxTooWideForPalletRow) {
     auto& p = std::get<tc::PalletizeParams>(task.params);
     // Box wider than the row direction → boxes_per_row = 0 → pattern
     // infeasibility, reported before any catalog lookup.
-    p.pallet.width = 0.5 * si::metre;
-    p.pallet.length = 0.5 * si::metre;
-    p.item.width = 0.6 * si::metre;
-    p.item.length = 0.6 * si::metre;
+    p.pallet.physical.width = 0.5 * si::metre;
+    p.pallet.physical.length = 0.5 * si::metre;
+    p.item.physical.width = 0.6 * si::metre;
+    p.item.physical.length = 0.6 * si::metre;
     auto result = strategy.evaluate(task);
     EXPECT_EQ(result.feasibility, ts::Feasibility::INFEASIBLE);
 }

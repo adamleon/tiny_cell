@@ -6,12 +6,32 @@
 
 ## Build order
 
-1. **Equipment catalog + strategy library** (`data-model.md` §2–3). Rigorously type what each strategy consumes (`requires_state`, guards, structural preconditions) and produces (`effect`, equipment, energy). The solver is generic; this domain knowledge determines whether output is usable. **Do this first.** *Notes:* catalog structs use raw mp-units quantity types in step 1; range invariants are enforced in the JSON loader at the `io/` boundary. Validated value-type wrappers (`architecture.md` §8) are staged in at step 4 — see `decisions.md`. **PARTIAL feasibility + precondition spawning are skipped here** and staged to step 4 along with the analytic throughput model (also `decisions.md`); step 1 strategies return only `FULL` / `INFEASIBLE`.
+1. **Equipment catalog + strategy library** (`data-model.md` §2–3). Rigorously type what each strategy consumes (`requires_knowledge`, guards, structural preconditions) and produces (`effect`, equipment, energy). The solver is generic; this domain knowledge determines whether output is usable. **Do this first.** *Notes:* catalog structs use raw mp-units quantity types in step 1; range invariants are enforced in the JSON loader at the `io/` boundary. Validated value-type wrappers (`architecture.md` §8) are staged in at step 4 — see `decisions.md`. **PARTIAL feasibility + precondition spawning are skipped here** and staged to step 4 along with the analytic throughput model (also `decisions.md`); step 1 strategies return only `FULL` / `INFEASIBLE`.
 2. **Brute-force enumerator** over tiny problems (3–5 tasks) to validate the strategy library produces sensible plans before any metaheuristic can hide bad engineering. *Note:* the enumerator loads each catalog via its per-category loader (`decisions.md` — per-category dispatch); strategies match tasks by capability and consume only their own category.
-3. **Item-state propagation** pass over the workflow DAG (`data-model.md` §4) with the MVP-scoped state vector.
+3. **Item-knowledge propagation** pass over the workflow DAG (`data-model.md` §4). Introduces the four-way concept split (item-physical / item-knowledge / sensor-capability / actor-requirement+effect), the property-based gating principle (strategies switch on item PROPERTIES via shared helpers, not on item TYPES — see `decisions.md`), and the minimum types that make it work: `RotationalSymmetry` on `ItemPhysical`, `OrientationKnowledge` on `ItemKnowledge`, `distinct_orientations` / `orientation_resolved` helpers, Arm + Pusher predicates wired to gate on the helper. Position knowledge stays binary at this step. The shape of `ItemPhysical` extracted now (composed by `BoxSpec` and `PalletSpec`); future item types follow the same wrap pattern.
 4. **Layer 2 allocation** — assignment/packing with sharing (`solver.md` Layer 2). **Introduce validated value-type wrappers (`architecture.md` §8) for the fields Layer 2 can produce or mutate**: this is the first point where solver code can emit a value that fails a range invariant (per `decisions.md`). Grow the wrapper set field-by-field as Layer 2 touches them — don't wrap fields no solver code consumes yet. **Introduce the analytic per-archetype throughput models** (`belt`, `picker`, `palletizer`-style functions giving items/min for a given parameter set) **and turn on PARTIAL handling** in strategies that can serve a task partially: `evaluate` emits `feasibility=PARTIAL` with `partial_info` and a residual sub-task in `preconditions`, enabling the "n× small equipment chained" branch of the OR-tree (per `decisions.md`). These two are tightly coupled — PARTIAL can't be computed honestly without the throughput model.
 5. **Layer 3 placement** — 2D NLP with positional-prior seeding (`solver.md` Layer 3 + positional prior). Build warm-start + partial-freeze support now (needed by both LNS and future interaction).
 6. **LNS + annealing** outer loop tying it together (`solver.md` outer loop).
+
+## Item-model staging (lives on the build steps above)
+
+The item-physical / item-knowledge model (`data-model.md` §4) grows as new strategies arrive. Concrete properties added when a real consumer needs them — never speculatively (`feedback_concrete_over_abstract`).
+
+- **Phase 1 — step 3 (now).** `ItemPhysical` with `width / length / height / mass / RotationalSymmetry`. `ItemKnowledge` with `position_known: bool / OrientationKnowledge / OnCarrier`. `distinct_orientations` + `orientation_resolved` helpers. Arm and Pusher predicates gate on these.
+- **Phase 2 — when the first sensor or shape-aware actor strategy lands** (likely post-MVP since the MVP roadmap steps 4–6 don't introduce new equipment classes — they're optimizer machinery on existing strategies). Each addition is a property + a helper + the affected strategy:
+  - **CameraStrategy** → `camera_reads(ItemPhysical) -> OrientationKnowledge` helper. Camera produces `Snapped(item.symmetry.period_deg)` for discrete items, `Unknown` (no-op) for continuous.
+  - **FixtureStrategy** → `fixture_forces(FixtureSpec, RotationalSymmetry) -> OrientationKnowledge`. Forces orientation regardless of prior; no-op on continuous items.
+  - **Position-axis-aware sensors** (laser, encoder) → upgrade `position_known: bool` to per-axis precision tracking (`x_known`, `y_known`, or a richer `PositionKnowledge`). Strategy predicates check the axes they need.
+  - **Different gripper classes** → `SurfaceProperties` on `ItemPhysical` + `graspable_by(ItemPhysical, GripperSpec) -> bool` helper.
+  - **Stack-stability-aware palletizing** → `stable_on(ItemPhysical, ItemPhysical) -> bool` helper, possibly with `Rigidity` on `ItemPhysical`.
+  - **Pallet manipulation** (forklift / transport) → no new property needed (pallet already has symmetry via `ItemPhysical`); the new strategy reads existing fields.
+- **Phase 3 — much later, if at all.**
+  - Probabilistic / confidence-weighted knowledge (camera reading with < 100% confidence). MVP is binary.
+  - Knowledge of orientation in *which frame* — explicit when frame composition lands (`architecture.md` §4).
+  - Composite items (a stack on a pallet as one item). Likely never; the workflow tracks each item separately.
+  - Chirality / reflection symmetries — needed only if a chiral item appears.
+
+The point of the staging is that each item-property addition is local: one property on `ItemPhysical`, one helper, one or more strategy predicates updated. The architectural seam (property-based gating, `decisions.md`) prevents the alternative — every new property forcing every strategy to add a switch-arm.
 
 ## Supporting tools
 
@@ -56,7 +76,7 @@ Add capability when the layer it serves first needs it.
 ## Known limitations / deferred
 
 - Strict lexicographic partial-handling can miss A-frees-resource-for-B cases. Accepted for MVP.
-- Item state is a fixed small vector, not a general planner. Generalize only on demand.
+- Item knowledge is a fixed small vector, not a general planner. Generalize only on demand.
 - Symmetry limited to z-rotation + flippable. Full SO(3) deferred.
 - 2D geometry, no IK. 3D deferred.
 - Approximate optimum only — LNS/annealing gives no global guarantee (acceptable by requirement).

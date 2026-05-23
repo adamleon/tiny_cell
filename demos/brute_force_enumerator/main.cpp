@@ -55,9 +55,9 @@ void print_task_summary(const tc::Task& task) {
     const auto& p = std::get<tc::PalletizeParams>(task.params);
     std::cout << "Task: " << task.id << "  (Palletize, "
               << p.box_count << " boxes @ "
-              << p.item.mass.numerical_value_in(si::kilogram) << " kg, pallet "
-              << p.pallet.width.numerical_value_in(si::metre) << " x "
-              << p.pallet.length.numerical_value_in(si::metre) << " m)\n";
+              << p.item.physical.mass.numerical_value_in(si::kilogram) << " kg, pallet "
+              << p.pallet.physical.width.numerical_value_in(si::metre) << " x "
+              << p.pallet.physical.length.numerical_value_in(si::metre) << " m)\n";
 }
 
 void print_enumeration(const ts::TaskEnumeration& te) {
@@ -90,15 +90,39 @@ void print_enumeration(const ts::TaskEnumeration& te) {
 
 std::vector<tc::Task> sample_workflow() {
     std::vector<tc::Task> tasks;
+    // Helper to build a BoxSpec — boxes here use a rectangular footprint
+    // (Discrete(180) symmetry) by default, so the task's catalog selection
+    // is exercised without coupling to the orientation gate (which lives
+    // in requires_knowledge, not applies_to / evaluate).
+    auto box = [](double w, double l, double h, double m) {
+        return tc::BoxSpec{
+            .physical = tc::ItemPhysical{
+                .width = w * si::metre,
+                .length = l * si::metre,
+                .height = h * si::metre,
+                .mass = m * si::kilogram,
+                .symmetry = tc::symmetry::discrete(180),
+            },
+        };
+    };
+    auto pallet = [](double w, double l) {
+        return tc::PalletSpec{
+            .physical = tc::ItemPhysical{
+                .width = w * si::metre,
+                .length = l * si::metre,
+                .height = 0.15 * si::metre,
+                .mass = 25.0 * si::kilogram,
+                .symmetry = tc::symmetry::discrete(180),
+            },
+        };
+    };
+
     tasks.push_back(tc::Task{
         .id = "task_small",
         .params = tc::PalletizeParams{
             .item_id = "box_400x300x200",
-            .item = tc::BoxSpec{.width = 0.3 * si::metre,
-                                .length = 0.4 * si::metre,
-                                .height = 0.2 * si::metre,
-                                .mass = 5.0 * si::kilogram},
-            .pallet = tc::PalletSpec{.width = 1.2 * si::metre, .length = 0.8 * si::metre},
+            .item = box(0.3, 0.4, 0.2, 5.0),
+            .pallet = pallet(1.2, 0.8),
             .box_count = 24,
         },
     });
@@ -106,11 +130,8 @@ std::vector<tc::Task> sample_workflow() {
         .id = "task_heavy",
         .params = tc::PalletizeParams{
             .item_id = "crate_heavy",
-            .item = tc::BoxSpec{.width = 0.5 * si::metre,
-                                .length = 0.5 * si::metre,
-                                .height = 0.3 * si::metre,
-                                .mass = 40.0 * si::kilogram},
-            .pallet = tc::PalletSpec{.width = 1.2 * si::metre, .length = 1.0 * si::metre},
+            .item = box(0.5, 0.5, 0.3, 40.0),
+            .pallet = pallet(1.2, 1.0),
             .box_count = 12,
         },
     });
@@ -118,11 +139,8 @@ std::vector<tc::Task> sample_workflow() {
         .id = "task_large_pallet",
         .params = tc::PalletizeParams{
             .item_id = "box_400x300x200",
-            .item = tc::BoxSpec{.width = 0.3 * si::metre,
-                                .length = 0.4 * si::metre,
-                                .height = 0.2 * si::metre,
-                                .mass = 8.0 * si::kilogram},
-            .pallet = tc::PalletSpec{.width = 2.0 * si::metre, .length = 2.0 * si::metre},
+            .item = box(0.3, 0.4, 0.2, 8.0),
+            .pallet = pallet(2.0, 2.0),
             .box_count = 36,
         },
     });

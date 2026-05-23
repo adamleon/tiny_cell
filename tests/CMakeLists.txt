@@ -44,15 +44,15 @@ target_compile_definitions(test_enumerator PRIVATE
 )
 add_test(NAME test_enumerator COMMAND test_enumerator)
 
-add_executable(test_state_propagation test_state_propagation.cpp)
-target_link_libraries(test_state_propagation PRIVATE
+add_executable(test_knowledge_propagation test_knowledge_propagation.cpp)
+target_link_libraries(test_knowledge_propagation PRIVATE
     TinyCell::core
     TinyCell::io
     TinyCell::solver
     GTest::gtest
     GTest::gtest_main
 )
-target_compile_definitions(test_state_propagation PRIVATE
+target_compile_definitions(test_knowledge_propagation PRIVATE
     TINYCELL_REPO_ROOT="${CMAKE_SOURCE_DIR}"
 )
-add_test(NAME test_state_propagation COMMAND test_state_propagation)
+add_test(NAME test_knowledge_propagation COMMAND test_knowledge_propagation)

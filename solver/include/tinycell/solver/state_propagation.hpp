@@ -1,18 +1,35 @@
 #pragma once
 
-// Item-state propagation — the workflow pass of roadmap.md step 3. Walks a
-// linear workflow in declaration order, checks each chosen strategy's
-// `requires_state` against the inbound state, then applies its `effect` to
-// produce the state the next task observes (data-model.md §4).
+// Item-state propagation — BATCH VALIDATOR for a finished candidate
+// solution. Walks a linear workflow in declaration order, checks each
+// chosen strategy's `requires_state` against the running state, applies
+// its `effect`, and returns either a full per-task trajectory (success)
+// or the first violation (failure). The state-flow rules themselves are
+// in data-model.md §4.
 //
-// Returns either a full per-task state trajectory (success) or the first
-// requires_state violation (failure). No recovery-task spawning at step 3 —
-// a violation simply FAILs the pass. Recovery belongs with the AND-OR
-// walker, which doesn't exist yet; the brute-force enumerator is a flat
-// per-task loop and step 3 stays compatible with that shape.
+// ROLE — read before adding callers. This file is the *batch validator*,
+// not the primitive a live solver consumes. The reusable state-flow
+// primitive lives on `StrategyResult`: the `requires_state` predicate
+// and `effect` function (strategy.hpp). A state-aware solver threads
+// state inline through its own per-task loop, using those two fields
+// directly — `state` is *input to strategy selection* at each task, not
+// something to validate after the whole candidate is built. So
+// `propagate_state` is for the cases where something OTHER than a state-
+// aware solver produced the candidate: late-stage validation of an
+// imported / relaxed / heuristically-built solution, the demo and tests
+// for this layer, and a clean diagnostic surface for the user. See
+// decisions.md "State-flow primitive … is load-bearing; the batch walker
+// … is a validator-only role." Will revisit when step 4 lands a
+// state-aware consumer and we know whether the validator role still has
+// callers.
 //
-// Out of scope: parallel branches, DAG edges, PARTIAL feasibility. Add when
-// a demo first needs them.
+// No recovery-task spawning at step 3 — a violation FAILs the pass.
+// Recovery belongs with the AND-OR walker, which doesn't exist yet; the
+// brute-force enumerator is a flat per-task loop and step 3 stays
+// compatible with that shape.
+//
+// Out of scope: parallel branches, DAG edges, PARTIAL feasibility. Add
+// when a demo first needs them.
 
 #include <cstddef>
 #include <span>

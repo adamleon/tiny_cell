@@ -37,9 +37,22 @@ struct EquipmentRef {
     std::string catalog_id;
 };
 
-// RequiresStateFn — predicate over the inbound ItemState at the node where
-// this strategy sits. Pure; called once per task by the propagation pass
-// (state_propagation.hpp). Returning false FAILs the pass at this task.
+// State-flow primitive: `requires_state` + `effect` are the load-bearing
+// pair every state-aware solver consumer reads (data-model.md §4). A
+// live solver threads state INLINE through its per-task loop — at each
+// task, filter applicable strategies by `requires_state(state)` against
+// the running state, pick a winner, then `state = winner.effect(state)`
+// to produce the input for the next task. State is *input to selection*,
+// not something validated after a whole candidate is built. The batch
+// walker `propagate_state` (state_propagation.hpp) is a separate,
+// validator-only consumer of these same two fields — used for finished
+// candidates that didn't thread state, demo, and tests. See decisions.md
+// "State-flow primitive … is load-bearing; the batch walker … is a
+// validator-only role."
+
+// RequiresStateFn — predicate over the inbound ItemState at the node
+// where this strategy sits. Pure; no captured mutable state. Returning
+// false means the strategy cannot run with the item in that state.
 using RequiresStateFn = std::function<bool(const core::ItemState&)>;
 
 // EffectFn — ItemState → ItemState applied AFTER the task to produce the
@@ -48,15 +61,13 @@ using EffectFn = std::function<core::ItemState(const core::ItemState&)>;
 
 // StrategyResult — the output of one Strategy::evaluate() call.
 //
-// `requires_state` and `effect` are the state-propagation contract
-// (data-model.md §4): the propagator checks the predicate against the
-// inbound state, and applies the effect to produce the next state.
-// Strategies SHOULD set both. INFEASIBLE results may leave them empty —
-// the propagator only walks results the caller passes in (typically the
-// per-task winners), so an INFEASIBLE result is not normally walked. If
-// the propagator does encounter an empty std::function, that is a defect
-// in the caller's selection logic, not a state-flow failure, and the
-// propagator asserts (engineering.md §3).
+// Strategies SHOULD always populate `requires_state` and `effect`, even
+// on INFEASIBLE returns — they describe the strategy's state-flow
+// contract, which is conceptually independent of whether a particular
+// catalog selection succeeded. Empty std::function on a consumed result
+// is a defect in the caller's selection logic, not a state-flow failure,
+// and consumers (e.g. propagate_state) reject it rather than fabricate
+// identity behaviour (engineering.md §3).
 //
 // PLACEHOLDER (step 4): partial_info + preconditions are absent — they
 // turn on with the analytic throughput model (decisions.md).

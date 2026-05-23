@@ -74,6 +74,37 @@ const tc::PusherSpec* select_pusher(const tc::PalletizeParams& p, int boxes_in_r
     return best;
 }
 
+// State-flow contract for PusherStrategy on a Palletize task:
+//   * requires_state — items must be on a feeder belt with their pose
+//     known. The equipment model is "items accumulate on a belt against
+//     an end stop until a row is queued, then one stroke transfers the
+//     whole row" — both inputs (carrier = BELT, pose known to align
+//     against the stop) are non-negotiable.
+//   * effect — after palletizing, the item rests on the pallet with its
+//     pose known (the stroke places it deterministically).
+// "Item is pushable" / shape-regularity guards are STATIC item properties,
+// not state predicates (data-model.md §2.1) — they live as INFEASIBLE
+// branches inside evaluate (currently the boxes_per_row == 0 short-
+// circuit). A pushable flag on BoxSpec would let pushable-INFEASIBLE be
+// reported pre-catalog like the pattern guard, but BoxSpec carries no
+// such flag yet.
+// PLACEHOLDER (step 4): add `pushable: bool` to BoxSpec and short-
+// circuit non-pushable items here before catalog lookup.
+RequiresStateFn pusher_requires_state() {
+    return [](const tc::ItemState& s) {
+        return s.position_known && s.on_carrier == tc::OnCarrier::Belt;
+    };
+}
+
+EffectFn pusher_palletize_effect() {
+    return [](const tc::ItemState& s) {
+        tc::ItemState next = s;
+        next.position_known = true;
+        next.on_carrier = tc::OnCarrier::Pallet;
+        return next;
+    };
+}
+
 } // namespace
 
 PusherStrategy::PusherStrategy(std::span<const tc::PusherSpec> catalog) : catalog_(catalog) {}
@@ -113,6 +144,8 @@ StrategyResult PusherStrategy::evaluate(const tc::Task& task) const {
             .equipment = std::nullopt,
             .energy_per_cycle = 0.0 * si::joule,
             .cycle_time = 0.0 * si::second,
+            .requires_state = pusher_requires_state(),
+            .effect = pusher_palletize_effect(),
         };
     }
 
@@ -124,6 +157,8 @@ StrategyResult PusherStrategy::evaluate(const tc::Task& task) const {
             .equipment = std::nullopt,
             .energy_per_cycle = 0.0 * si::joule,
             .cycle_time = 0.0 * si::second,
+            .requires_state = pusher_requires_state(),
+            .effect = pusher_palletize_effect(),
         };
     }
 
@@ -146,6 +181,8 @@ StrategyResult PusherStrategy::evaluate(const tc::Task& task) const {
         .equipment = EquipmentRef{.catalog_id = pusher->id},
         .energy_per_cycle = energy_j * si::joule,
         .cycle_time = cycle_time,
+        .requires_state = pusher_requires_state(),
+        .effect = pusher_palletize_effect(),
     };
 }
 

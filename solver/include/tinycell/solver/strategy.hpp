@@ -9,9 +9,11 @@
 // PusherStrategy, ConveyorStrategy — never for a (type × task) combination
 // (decisions.md). One strategy may cover multiple TaskKinds via applies_to.
 
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tinycell/model/item.hpp>
 #include <tinycell/model/task.hpp>
 #include <tinycell/units.hpp>
 
@@ -35,21 +37,37 @@ struct EquipmentRef {
     std::string catalog_id;
 };
 
-// StrategyResult — the output of one Strategy::evaluate() call. The minimum
-// set of fields needed to compare proposals on cost + feasibility. The full
-// spec in data-model.md §2 has more fields (poses, requires_state, effect,
-// preconditions, partial_info); they're added here as solver consumers
-// emerge.
+// RequiresStateFn — predicate over the inbound ItemState at the node where
+// this strategy sits. Pure; called once per task by the propagation pass
+// (state_propagation.hpp). Returning false FAILs the pass at this task.
+using RequiresStateFn = std::function<bool(const core::ItemState&)>;
+
+// EffectFn — ItemState → ItemState applied AFTER the task to produce the
+// state the next task observes. Pure; no captured mutable state.
+using EffectFn = std::function<core::ItemState(const core::ItemState&)>;
+
+// StrategyResult — the output of one Strategy::evaluate() call.
 //
-// PLACEHOLDER (step 4): partial_info + preconditions are absent. They're
-// turned on with the analytic throughput model — PARTIAL can't be computed
-// honestly without it (decisions.md).
+// `requires_state` and `effect` are the state-propagation contract
+// (data-model.md §4): the propagator checks the predicate against the
+// inbound state, and applies the effect to produce the next state.
+// Strategies SHOULD set both. INFEASIBLE results may leave them empty —
+// the propagator only walks results the caller passes in (typically the
+// per-task winners), so an INFEASIBLE result is not normally walked. If
+// the propagator does encounter an empty std::function, that is a defect
+// in the caller's selection logic, not a state-flow failure, and the
+// propagator asserts (engineering.md §3).
+//
+// PLACEHOLDER (step 4): partial_info + preconditions are absent — they
+// turn on with the analytic throughput model (decisions.md).
 struct StrategyResult {
     Feasibility feasibility;
     std::string strategy_name;
     std::optional<EquipmentRef> equipment;
     core::Energy energy_per_cycle;
     core::Duration cycle_time;
+    RequiresStateFn requires_state;
+    EffectFn effect;
 };
 
 // Strategy — abstract base for all engineering-knowledge encoders. Concrete

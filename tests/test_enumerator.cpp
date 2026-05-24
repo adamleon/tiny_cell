@@ -33,12 +33,24 @@ tc::Task make_palletize(const std::string& id, double item_mass_kg,
         .id = id,
         .params = tc::PalletizeParams{
             .item_id = "box",
-            .item = tc::BoxSpec{.width = 0.3 * si::metre,
-                                .length = 0.4 * si::metre,
-                                .height = 0.2 * si::metre,
-                                .mass = item_mass_kg * si::kilogram},
-            .pallet = tc::PalletSpec{.width = pallet_w_m * si::metre,
-                                     .length = pallet_l_m * si::metre},
+            .item = tc::BoxSpec{
+                .physical = tc::ItemPhysical{
+                    .width = 0.3 * si::metre,
+                    .length = 0.4 * si::metre,
+                    .height = 0.2 * si::metre,
+                    .mass = item_mass_kg * si::kilogram,
+                    .symmetry = tc::symmetry::discrete(180),
+                },
+            },
+            .pallet = tc::PalletSpec{
+                .physical = tc::ItemPhysical{
+                    .width = pallet_w_m * si::metre,
+                    .length = pallet_l_m * si::metre,
+                    .height = 0.15 * si::metre,
+                    .mass = 25.0 * si::kilogram,
+                    .symmetry = tc::symmetry::discrete(180),
+                },
+            },
             .box_count = box_count,
         },
     };

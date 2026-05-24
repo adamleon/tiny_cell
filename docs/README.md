@@ -14,7 +14,7 @@ The solution need not be globally optimal — approximately optimal is acceptabl
 |---|---|---|
 | `README.md` | This file: glossary, map | — |
 | `architecture.md` | System-level module breakdown, boundaries, data flow, frames, geometry/units, ECS | Written |
-| `data-model.md` | All type/schema contracts (Task, Strategy, ItemState, catalog, footprint cache, output) | Written |
+| `data-model.md` | All type/schema contracts (Task, Strategy, ItemPhysical, ItemKnowledge, catalog, footprint cache, output) | Written |
 | `solver.md` | The solver algorithm: three layers + LNS optimizer + positional prior + geometry flattening & caching | Written |
 | `interaction.md` | Graded interactive editing ; maps onto footprint cache levels | Written |
 | `standards.md` | Compliance standards + rules-file schema | **STUB — needs your input** |
@@ -53,9 +53,17 @@ MVP is a *subset and sequence* of this design, not a separate design. There is n
 
 **Candidate binding** — A strategy proposes a *specific* real equipment model (to compute reach/energy/feasibility) but as a *candidate*, not a commitment. Deciding to share one physical instance across tasks is the allocation layer's job, not the strategy's — committing inside the strategy would destroy cross-station sharing.
 
-**ItemState** — A small, fixed, forward-propagated vector of facts about an item (position_known, orientation_resolved_to, on_carrier, …) that equipment `effect`s mutate as the item flows through the workflow. A strategy's `requires_state` is checked against the state *as it is at that node*.
+**ItemPhysical** — Static physical-spec fields every item type carries (dimensions, mass, symmetry; future surface / rigidity / chirality). Lives on each item type's spec by composition (`BoxSpec { ItemPhysical physical; }`). New shared properties land here once; new type-specific fields live on the wrapper.
 
-**ItemSymmetry** — Describes how much orientation must be known: z_rotation ∈ {CONTINUOUS, DISCRETE(n), NONE} + flippable. A task's orientation requirement is satisfied when what it needs resolved ⊇ what symmetry already collapses (a bottle needs no rotation known; a square box only mod 90°).
+**ItemState** — A small, fixed, forward-propagated bundle of planner-tracked facts about an item flowing through the workflow (`position_known`, `orientation { knowledge, control }`, `on_carrier`). Strategy `effect`s mutate it; strategy `requires_state` predicates check it. Bundles both planner *beliefs* (Knowledge axis on orientation, pose-precision flags) and planner-tracked *physical facts* (carrier, Control axis on orientation).
+
+**RotationalSymmetry** — Static property on `ItemPhysical`. Variant of `Continuous | Discrete{period_deg} | Asymmetric`. `period_deg` is the smallest rotation that maps the item to itself (rectangle 180; square 90; triangle 120; hexagon 60). Rotation only — reflections / chirality aren't modelled for MVP.
+
+**Alignment** — A symmetry-equivalence class of orientations. A rectangle has 2 alignments at the 90° cardinal grid (long-along-X / long-along-Y); a square has 1; a cylinder has 1 (trivially); an asymmetric block has 4. Computed via `distinct_alignments(symmetry)`. Strategies pin alignment by index, not by angle.
+
+**OrientationKnowledge** — Planner belief axis on `ItemState.orientation`. Variant of `Unknown | Known{alignment}`. Updated by passive observations (camera). Read by arm-style strategies.
+
+**OrientationControl** — Physical constraint axis on `ItemState.orientation`. Variant of `Free | Constrained{alignment}`. Updated by mechanical actions (fixture, side-guides). Read by pusher-style strategies whose open-loop strokes need physical hold, not just observation.
 
 **Sharing (two levels)** — *Strategy-class reuse*: one strategy applies to multiple task types. *Instance reuse*: one physical unit serves multiple tasks via candidate binding (e.g. an underutilized arm covering an adjacent station's transport task).
 

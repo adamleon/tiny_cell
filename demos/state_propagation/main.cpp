@@ -122,6 +122,7 @@ tc::Task make_palletize(const std::string& id, tc::RotationalSymmetry box_symmet
             },
             .box_count = 24,
         },
+        .target_ct_per_item = 5.0 * si::second,
     };
 }
 

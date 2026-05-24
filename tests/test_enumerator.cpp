@@ -53,6 +53,7 @@ tc::Task make_palletize(const std::string& id, double item_mass_kg,
             },
             .box_count = box_count,
         },
+        .target_ct_per_item = 5.0 * si::second,
     };
 }
 

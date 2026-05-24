@@ -46,10 +46,18 @@ enum class TaskKind { Palletize };
 // (e.g. 24 boxes × 100 pallets/h = 2400 boxes/h → 1.5 s/box) and writes
 // it here. The solver itself never allocates cycle time across stations;
 // it only consumes this target and explores the OR-tree to meet it.
+//
+// `is_residual` flags a task that was emitted by another strategy's
+// PARTIAL result (preconditions). Some strategies refuse residuals —
+// PusherStrategy in particular, because a pusher owns its station and
+// cannot supplement another strategy (decisions.md "Pusher strategies
+// emit only FULL or INFEASIBLE; refuse residual tasks"). Default false
+// for top-level workflow-defined tasks.
 struct Task {
     std::string id;
     TaskParams params;
     CycleTimePerItem target_ct_per_item;
+    bool is_residual = false;
 
     TaskKind kind() const {
         if (std::holds_alternative<PalletizeParams>(params)) {

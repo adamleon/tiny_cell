@@ -227,6 +227,9 @@ StrategyResult PusherStrategy::evaluate(const tc::Task& task) const {
             .equipment = std::nullopt,
             .energy_per_cycle = 0.0 * si::joule,
             .cycle_time = 0.0 * si::second,
+            .achievable_ct_per_item = 0.0 * si::second,
+            .partial_info = std::nullopt,
+            .preconditions = {},
             .requires_state = pusher_requires_state(
                 p.item.physical.symmetry, required_alignment),
             .effect = pusher_palletize_effect(),
@@ -241,6 +244,9 @@ StrategyResult PusherStrategy::evaluate(const tc::Task& task) const {
             .equipment = std::nullopt,
             .energy_per_cycle = 0.0 * si::joule,
             .cycle_time = 0.0 * si::second,
+            .achievable_ct_per_item = 0.0 * si::second,
+            .partial_info = std::nullopt,
+            .preconditions = {},
             .requires_state = pusher_requires_state(
                 p.item.physical.symmetry, required_alignment),
             .effect = pusher_palletize_effect(),
@@ -251,18 +257,31 @@ StrategyResult PusherStrategy::evaluate(const tc::Task& task) const {
     // task is per_stroke × num_rows. In-feed accumulation between
     // strokes is assumed to overlap perfectly; a real throughput model
     // coupling in-feed rate, pusher cycle, and pallet advance will
-    // replace the body of pusher_motion_cycle in step 5+.
+    // replace the body of pusher_motion_cycle in step 5+. Per-item
+    // cycle time is per_stroke / boxes_per_row (one stroke moves a
+    // full row of `boxes_per_row` items).
     const auto per_stroke = pusher_motion_cycle(layout.row_payload, *pusher);
     const auto num_rows = static_cast<double>(layout.num_rows);
+    const auto boxes_per_row = static_cast<double>(layout.boxes_per_row);
     const auto cycle_time = per_stroke.cycle_time * num_rows;
     const auto energy_per_cycle = per_stroke.energy_per_cycle * num_rows;
+    const auto achievable_ct_per_item = per_stroke.cycle_time / boxes_per_row;
 
+    // Note: PusherStrategy never emits PARTIAL — a pusher owns its
+    // station and cannot supplement another strategy or be supplemented
+    // by another pusher in the same station (decisions.md "Pusher
+    // strategies emit only FULL or INFEASIBLE; refuse residual tasks").
+    // The rate gate that converts "too slow" into INFEASIBLE lands with
+    // the applies_to refusal for residuals in the next commit.
     return StrategyResult{
         .feasibility = Feasibility::FULL,
         .strategy_name = std::string{name()},
         .equipment = EquipmentRef{.catalog_id = pusher->id},
         .energy_per_cycle = energy_per_cycle,
         .cycle_time = cycle_time,
+        .achievable_ct_per_item = achievable_ct_per_item,
+        .partial_info = std::nullopt,
+        .preconditions = {},
         .requires_state = pusher_requires_state(
             p.item.physical.symmetry, required_alignment),
         .effect = pusher_palletize_effect(),

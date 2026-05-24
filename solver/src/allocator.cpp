@@ -40,7 +40,7 @@ AllocationResult allocate(std::span<const TaskEnumeration> per_task) {
 
     for (const auto& te : per_task) {
         if (!te.winner_index) {
-            result.unallocated.push_back(te.task->id);
+            result.unallocated.push_back(te.task.id);
             continue;
         }
         const auto& winner = te.proposals[*te.winner_index];
@@ -52,7 +52,7 @@ AllocationResult allocate(std::span<const TaskEnumeration> per_task) {
             // each residual recursively. Today pick_winner only picks
             // FULL so this branch is unreachable; routing to
             // `unallocated` keeps the output well-defined.
-            result.unallocated.push_back(te.task->id);
+            result.unallocated.push_back(te.task.id);
             continue;
         }
         if (!winner.equipment) {
@@ -60,13 +60,13 @@ AllocationResult allocate(std::span<const TaskEnumeration> per_task) {
             // the allocator's concern — route to `unallocated` rather
             // than fabricate a binding (engineering.md §3, "never
             // clamp / never invent").
-            result.unallocated.push_back(te.task->id);
+            result.unallocated.push_back(te.task.id);
             continue;
         }
 
-        const auto target = te.task->target_ct_per_item.value();
+        const auto target = te.task.target_ct_per_item.value();
         BoundInstance::ServedTask st{
-            .task_id = te.task->id,
+            .task_id = te.task.id,
             .target_ct_per_item = target,
             .achievable_ct_per_item = winner.achievable_ct_per_item,
             .cycle_time = winner.cycle_time,

@@ -27,30 +27,48 @@
 
 namespace tinycell::solver {
 
-// TaskEnumeration — what the enumerator produces for ONE task.
-//   * task is a non-owning pointer back into the workflow span the caller
-//     passed in. The caller's workflow must outlive the returned vector.
+// TaskEnumeration — what the enumerator produces for ONE task (original
+// workflow task or a PARTIAL residual).
+//   * task is owned by value so residual tasks generated mid-enumeration
+//     have stable lifetime alongside their workflow-original siblings.
+//     Residual tasks carry `task.is_residual = true`.
 //   * proposals holds one StrategyResult per applicable strategy, in the
 //     order strategies were registered. Inapplicable strategies do not
 //     appear here (filtered by applies_to()).
 //   * winner_index points into `proposals` at the chosen winner, or is
-//     nullopt when no proposal is FULL.
+//     nullopt when no proposal is feasible at all.
 struct TaskEnumeration {
-    const core::Task* task;
+    core::Task task;
     std::vector<StrategyResult> proposals;
     std::optional<std::size_t> winner_index;
 };
 
-// enumerate(): for every task, call evaluate on every strategy that applies,
-// then pick the FULL proposal with the lowest energy_per_cycle as winner.
-// Returns one TaskEnumeration per task, in workflow order.
+// Maximum recursion depth for PARTIAL chain walking. Each PARTIAL
+// residual that produces another PARTIAL costs one depth. The math:
+// ArmStrategy's residual_target = (a × t) / (a − t) converges toward
+// `achievable` from below, so a chain is bounded in length by roughly
+// log(achievable / target). For pathological cases where the cheapest
+// feasible arm is many times slower than the original target, the
+// chain converges slowly; this cap protects against unbounded
+// recursion and is high enough that realistic chains terminate at
+// FULL well before hitting it.
+constexpr std::size_t MAX_PARTIAL_CHAIN_DEPTH = 10;
+
+// enumerate(): for every task in the workflow, evaluate every applicable
+// strategy and pick a winner. When the winner is PARTIAL, recurse on
+// each residual task in `winner.preconditions`, appending each recursive
+// TaskEnumeration to the output. The output is a flat list in DFS order:
+// original workflow task first, then its residuals (each followed by
+// any residuals of its own), then the next workflow task.
 //
-// PLACEHOLDER (step 4): ranking by energy_per_cycle is provisional. Both
-// the energy and cycle-time values are themselves placeholders inside the
-// strategies (see ArmStrategy / PusherStrategy), so the winner is a
-// plausibility check, not an engineering decision. Step 4 introduces the
-// real cost function (capex + opex from data-model.md §6) and PARTIAL
-// feasibility chaining; this comparator becomes a multi-criterion ranker.
+// Winner selection: prefer FULL (lowest energy_per_cycle); if no FULL
+// proposal exists, fall back to PARTIAL (lowest energy_per_cycle).
+// INFEASIBLE-only tasks have no winner.
+//
+// PLACEHOLDER (step 4-5): ranking by energy_per_cycle alone is
+// provisional. Step 5+ introduces the full cost function (capex +
+// lifetime energy + maintenance — see cost.hpp) and a multi-criterion
+// ranker; the comparator inside pick_winner is the seam.
 std::vector<TaskEnumeration> enumerate(std::span<const core::Task> workflow,
                                        std::span<const Strategy* const> strategies);
 

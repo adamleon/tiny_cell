@@ -61,7 +61,7 @@ void print_task_summary(const tc::Task& task) {
 }
 
 void print_enumeration(const ts::TaskEnumeration& te) {
-    print_task_summary(*te.task);
+    print_task_summary(te.task);
     std::cout << std::left << std::setw(18) << "  strategy"
               << std::setw(14) << "feasibility"
               << std::setw(24) << "equipment"

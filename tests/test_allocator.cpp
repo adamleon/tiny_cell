@@ -91,11 +91,10 @@ ts::StrategyResult make_infeasible_result(const std::string& strategy_name) {
     };
 }
 
-ts::TaskEnumeration make_enumeration(const tc::Task& task,
+ts::TaskEnumeration make_enumeration(tc::Task task,
                                      ts::StrategyResult result,
                                      bool with_winner) {
-    ts::TaskEnumeration te;
-    te.task = &task;
+    ts::TaskEnumeration te{.task = std::move(task)};
     te.proposals.push_back(std::move(result));
     te.winner_index = with_winner ? std::optional<std::size_t>{0} : std::nullopt;
     return te;

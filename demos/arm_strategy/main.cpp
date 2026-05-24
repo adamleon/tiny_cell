@@ -56,7 +56,7 @@ int main() {
             },
             .box_count = 24,
         },
-        .target_ct_per_item = 5.0 * si::second,
+        .target_ct_per_item = tc::CycleTimePerItem{5.0 * si::second},
     };
 
     std::cout << "Task: " << palletize.id << " (Palletize, 24 boxes @ 5 kg each)\n\n";

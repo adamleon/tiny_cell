@@ -119,7 +119,7 @@ const tc::PusherSpec* select_pusher(const tc::PalletizeParams& p,
 
     const tc::PusherSpec* best = nullptr;
     for (const auto& pusher : catalog) {
-        if (pusher.payload_max < layout.row_payload) {
+        if (pusher.payload_max.value() < layout.row_payload) {
             continue;
         }
         if (pusher.stroke < required_stroke) {

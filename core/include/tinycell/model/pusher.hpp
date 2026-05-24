@@ -9,6 +9,7 @@
 
 #include <string>
 #include <tinycell/geometry.hpp>
+#include <tinycell/model/validated.hpp>
 #include <tinycell/units.hpp>
 
 namespace tinycell::core {
@@ -33,7 +34,7 @@ struct PusherSpec {
     std::string controller_class;
     Polygon footprint;
     Length stroke;
-    Mass payload_max;
+    Payload payload_max;
     Duration cycle_time_per_push;
     Power power_peak;
     Power power_idle;

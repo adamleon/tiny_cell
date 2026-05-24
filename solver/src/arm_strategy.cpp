@@ -44,10 +44,11 @@ const tc::ArmSpec* select_arm(const tc::PalletizeParams& p,
 
     const tc::ArmSpec* best = nullptr;
     for (const auto& arm : catalog) {
-        if (arm.payload_max < p.item.physical.mass) {
+        if (arm.payload_max.value() < p.item.physical.mass) {
             continue;
         }
-        if (arm.reach.max_radius.numerical_value_in(si::metre) < 0.5 * pallet_diagonal_m) {
+        if (arm.reach.max_radius.value().numerical_value_in(si::metre)
+            < 0.5 * pallet_diagonal_m) {
             continue;
         }
         if (best == nullptr || arm.list_price_eur < best->list_price_eur) {

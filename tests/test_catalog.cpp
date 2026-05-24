@@ -45,8 +45,8 @@ TEST(ArmCatalog, FieldsRoundTrip) {
     const auto& kr4 = entries.front();
     EXPECT_EQ(kr4.id, "kuka_kr4_r600");
     EXPECT_EQ(kr4.family, "agilus");
-    EXPECT_NEAR(kr4.payload_max.numerical_value_in(si::kilogram), 4.0, 1e-9);
-    EXPECT_NEAR(kr4.reach.max_radius.numerical_value_in(si::metre), 0.601, 1e-9);
+    EXPECT_NEAR(kr4.payload_max.value().numerical_value_in(si::kilogram), 4.0, 1e-9);
+    EXPECT_NEAR(kr4.reach.max_radius.value().numerical_value_in(si::metre), 0.601, 1e-9);
     EXPECT_NEAR(kr4.list_price_eur, 25000.0, 1e-9);
     EXPECT_EQ(kr4.regen_capable, false);
 }
@@ -114,7 +114,7 @@ TEST(PusherCatalog, FieldsRoundTrip) {
     EXPECT_EQ(first.id, "pusher_short_light");
     EXPECT_EQ(first.family, "pneumatic_short");
     EXPECT_NEAR(first.stroke.numerical_value_in(si::metre), 0.2, 1e-9);
-    EXPECT_NEAR(first.payload_max.numerical_value_in(si::kilogram), 5.0, 1e-9);
+    EXPECT_NEAR(first.payload_max.value().numerical_value_in(si::kilogram), 5.0, 1e-9);
     EXPECT_NEAR(first.cycle_time_per_push.numerical_value_in(si::second), 1.2, 1e-9);
     EXPECT_NEAR(first.list_price_eur, 3200.0, 1e-9);
 }

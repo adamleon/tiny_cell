@@ -8,6 +8,7 @@
 
 #include <string>
 #include <tinycell/geometry.hpp>
+#include <tinycell/model/validated.hpp>
 #include <tinycell/units.hpp>
 
 namespace tinycell::core {
@@ -15,10 +16,13 @@ namespace tinycell::core {
 // Reach envelope as the catalog declares it. Today only the "radius" form
 // (a circular workspace, in the floor plane) is parsed; richer polygonal
 // envelopes can be added when needed without breaking callers that only
-// read max_radius.
+// read max_radius. min_radius stays as raw Length because zero is a valid
+// inner radius (the arm reaches all the way to its base column);
+// max_radius is wrapped because zero or negative is nonsense and reaches
+// it via solver arithmetic would be a bug.
 struct ReachEnvelope {
     Length min_radius;
-    Length max_radius;
+    ReachRadius max_radius;
 };
 
 // ArmSpec — one row of the arm catalog. Immutable description of one arm
@@ -33,7 +37,7 @@ struct ArmSpec {
     std::string controller_class;
     Polygon footprint;
     ReachEnvelope reach;
-    Mass payload_max;
+    Payload payload_max;
     Mass mass;
     Speed max_speed;
     Acceleration max_acceleration;

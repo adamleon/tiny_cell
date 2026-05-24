@@ -60,7 +60,7 @@ tc::Task small_palletize_task(const std::string& id = "t",
             },
             .box_count = 24,
         },
-        .target_ct_per_item = 5.0 * si::second,
+        .target_ct_per_item = tc::CycleTimePerItem{5.0 * si::second},
     };
 }
 

@@ -125,7 +125,7 @@ std::vector<tc::Task> sample_workflow() {
             .pallet = pallet(1.2, 0.8),
             .box_count = 24,
         },
-        .target_ct_per_item = 5.0 * si::second,
+        .target_ct_per_item = tc::CycleTimePerItem{5.0 * si::second},
     });
     tasks.push_back(tc::Task{
         .id = "task_heavy",
@@ -135,7 +135,7 @@ std::vector<tc::Task> sample_workflow() {
             .pallet = pallet(1.2, 1.0),
             .box_count = 12,
         },
-        .target_ct_per_item = 5.0 * si::second,
+        .target_ct_per_item = tc::CycleTimePerItem{5.0 * si::second},
     });
     tasks.push_back(tc::Task{
         .id = "task_large_pallet",
@@ -145,7 +145,7 @@ std::vector<tc::Task> sample_workflow() {
             .pallet = pallet(2.0, 2.0),
             .box_count = 36,
         },
-        .target_ct_per_item = 5.0 * si::second,
+        .target_ct_per_item = tc::CycleTimePerItem{5.0 * si::second},
     });
     return tasks;
 }

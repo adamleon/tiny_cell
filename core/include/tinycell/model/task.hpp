@@ -10,6 +10,7 @@
 #include <string>
 #include <tinycell/model/box.hpp>
 #include <tinycell/model/pallet.hpp>
+#include <tinycell/model/validated.hpp>
 #include <tinycell/units.hpp>
 #include <variant>
 
@@ -48,7 +49,7 @@ enum class TaskKind { Palletize };
 struct Task {
     std::string id;
     TaskParams params;
-    Duration target_ct_per_item;
+    CycleTimePerItem target_ct_per_item;
 
     TaskKind kind() const {
         if (std::holds_alternative<PalletizeParams>(params)) {

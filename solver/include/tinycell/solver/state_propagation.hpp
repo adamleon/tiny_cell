@@ -20,9 +20,13 @@
 // an imported / relaxed / heuristically-built solution, the demo and
 // tests for this layer, and a clean diagnostic surface for the user.
 // See decisions.md "State-flow primitive … is load-bearing; the batch
-// walker … is a validator-only role." Will revisit when step 4 lands a
-// state-aware consumer and we know whether the validator role still
-// has callers.
+// walker … is a validator-only role." Step 4 (Layer-2 allocation) did
+// NOT add a state-aware solver consumer — the allocator reads bindings
+// and rates, not `requires_state` / `effect`. The validator role still
+// has callers (the brute-force demo and its tests), so the walker
+// stays. Revisit if step 5+ introduces a solver that threads state
+// inline; at that point either the validator role retires or both
+// consumers coexist.
 //
 // No recovery-task spawning at step 3 — a violation FAILs the pass.
 // Recovery belongs with the AND-OR walker, which doesn't exist yet; the

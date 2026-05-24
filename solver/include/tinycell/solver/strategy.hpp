@@ -16,23 +16,26 @@
 #include <tinycell/model/item.hpp>
 #include <tinycell/model/task.hpp>
 #include <tinycell/units.hpp>
+#include <vector>
 
 namespace tinycell::solver {
 
 // Feasibility of one strategy proposal:
-//   FULL       — the strategy fully serves the task
-//   PARTIAL    — the strategy serves part of it; a residual sub-task is
-//                emitted as a precondition for the leftover work
-//                (PLACEHOLDER (step 4): not produced by any strategy today;
-//                requires the analytic throughput model — decisions.md)
-//   INFEASIBLE — the strategy cannot serve the task at all
+//   FULL       — the strategy fully serves the task at or below the task's
+//                `target_ct_per_item`.
+//   PARTIAL    — the strategy serves the task but slower than `target_ct_per_item`;
+//                a residual sub-task with a tightened target is emitted as
+//                a precondition for the leftover throughput. Produced today
+//                by ArmStrategy only — PusherStrategy never emits PARTIAL
+//                (decisions.md "Pusher strategies emit only FULL or INFEASIBLE").
+//   INFEASIBLE — the strategy cannot serve the task at all.
 enum class Feasibility { FULL, PARTIAL, INFEASIBLE };
 
 // EquipmentRef names a specific catalog entry by id. A strategy proposes
-// this as a CANDIDATE binding, not a commitment — Layer 2 (allocation,
-// step 4) decides whether one physical instance is reused across tasks.
-// Committing inside the strategy would foreclose cross-task instance
-// sharing (data-model.md §2, "candidate binding, not commitment").
+// this as a CANDIDATE binding, not a commitment — the Layer-2 allocator
+// (`solver/allocator.hpp`) decides whether one physical instance is reused
+// across tasks. Committing inside the strategy would foreclose cross-task
+// instance sharing (data-model.md §2, "candidate binding, not commitment").
 struct EquipmentRef {
     std::string catalog_id;
 };
@@ -71,6 +74,15 @@ using RequiresStateFn = std::function<bool(const core::ItemState&)>;
 // the state the next task observes. Pure; no captured mutable state.
 using EffectFn = std::function<core::ItemState(const core::ItemState&)>;
 
+// PartialInfo — the throughput gap a PARTIAL result reports. `achievable`
+// is what this strategy actually produces on this task; `target` is what
+// the task asked for. Both are per-item times so the comparison is
+// direct (decisions.md "Throughput target stored as time_per_item …").
+struct PartialInfo {
+    core::Duration achievable_ct_per_item;
+    core::Duration target_ct_per_item;
+};
+
 // StrategyResult — the output of one Strategy::evaluate() call.
 //
 // Strategies SHOULD always populate `requires_state` and `effect`,
@@ -81,14 +93,30 @@ using EffectFn = std::function<core::ItemState(const core::ItemState&)>;
 // failure, and consumers (e.g. propagate_state) reject it rather than
 // fabricate identity behaviour (engineering.md §3).
 //
-// PLACEHOLDER (step 4): partial_info + preconditions are absent — they
-// turn on with the analytic throughput model (decisions.md).
+// `achievable_ct_per_item` is the per-item cycle time this strategy
+// claims to deliver on this task. The Layer-2 allocator reads it to
+// compute each instance's contribution to the task's required rate
+// (decisions.md "Per-task throughput target"). On INFEASIBLE the field
+// is 0 (matching the cycle_time / energy_per_cycle convention) — it is
+// not meaningful and should not be read.
+//
+// `partial_info` is set iff feasibility == PARTIAL — it carries the
+// achievable/target gap for diagnostics, redundant with the value on
+// `Task` but co-located here so consumers don't have to look back at
+// the task.
+//
+// `preconditions` carries residual sub-tasks the strategy emits as
+// PARTIAL chaining. Empty unless feasibility == PARTIAL. Each residual
+// has `is_residual = true` and a tightened target.
 struct StrategyResult {
     Feasibility feasibility;
     std::string strategy_name;
     std::optional<EquipmentRef> equipment;
     core::Energy energy_per_cycle;
     core::Duration cycle_time;
+    core::Duration achievable_ct_per_item;
+    std::optional<PartialInfo> partial_info;
+    std::vector<core::Task> preconditions;
     RequiresStateFn requires_state;
     EffectFn effect;
 };

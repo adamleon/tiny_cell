@@ -76,6 +76,8 @@ Add capability when the layer it serves first needs it.
 
 ## Known limitations / deferred
 
+- Coarse arm motion model (straight-line at `max_speed`) is structurally optimistic vs. catalog-declared pusher cycle times, skewing OR-tree comparisons toward arms. Overall safety margin on `target_ct_per_item` (~1.3×) and arm-specific derate both deferred — framing in `decisions.md` "Model-vs-reality safety margin deferred". Revisit at first visibly-wrong choice from the step-4 demo or when calibration data lands.
+- Station replication when no single-station solution exists is deferred to the Layer-2 allocator (commit 7+) — framing in `decisions.md` "Station-splitting mechanism deferred". Commit-9 tests exercise PARTIAL chaining only on toy problems with one-station solutions.
 - Strict lexicographic partial-handling can miss A-frees-resource-for-B cases. Accepted for MVP.
 - Item knowledge is a fixed small vector, not a general planner. Generalize only on demand.
 - Symmetry limited to z-rotation + flippable. Full SO(3) deferred.

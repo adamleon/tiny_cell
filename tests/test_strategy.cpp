@@ -51,6 +51,9 @@ tc::Task small_palletize_task() {
             },
             .box_count = 24,
         },
+        // Loose target so existing FULL tests remain FULL once PARTIAL
+        // emission lands; PARTIAL-specific tests will set tighter targets.
+        .target_ct_per_item = tc::CycleTimePerItem{5.0 * si::second},
     };
 }
 

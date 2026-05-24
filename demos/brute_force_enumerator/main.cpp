@@ -61,7 +61,7 @@ void print_task_summary(const tc::Task& task) {
 }
 
 void print_enumeration(const ts::TaskEnumeration& te) {
-    print_task_summary(*te.task);
+    print_task_summary(te.task);
     std::cout << std::left << std::setw(18) << "  strategy"
               << std::setw(14) << "feasibility"
               << std::setw(24) << "equipment"
@@ -125,6 +125,7 @@ std::vector<tc::Task> sample_workflow() {
             .pallet = pallet(1.2, 0.8),
             .box_count = 24,
         },
+        .target_ct_per_item = tc::CycleTimePerItem{5.0 * si::second},
     });
     tasks.push_back(tc::Task{
         .id = "task_heavy",
@@ -134,6 +135,7 @@ std::vector<tc::Task> sample_workflow() {
             .pallet = pallet(1.2, 1.0),
             .box_count = 12,
         },
+        .target_ct_per_item = tc::CycleTimePerItem{5.0 * si::second},
     });
     tasks.push_back(tc::Task{
         .id = "task_large_pallet",
@@ -143,6 +145,7 @@ std::vector<tc::Task> sample_workflow() {
             .pallet = pallet(2.0, 2.0),
             .box_count = 36,
         },
+        .target_ct_per_item = tc::CycleTimePerItem{5.0 * si::second},
     });
     return tasks;
 }

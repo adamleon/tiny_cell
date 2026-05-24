@@ -8,10 +8,11 @@
 //
 // Success: prints `feasibility: FULL`, picks `kuka_kr6_r900_2` (the
 // cheapest catalog arm meeting both payload and the half-pallet-diagonal
-// reach proxy), and labels the cycle-time / energy as PLACEHOLDER for
-// step 4. If you see `feasibility: INFEASIBLE`, either the catalog can't
-// satisfy the task (check the printed pallet/box numbers) or the reach
-// proxy was tightened — re-read `select_arm`'s comments in
+// reach proxy), and prints the cycle-time and energy from the coarse
+// motion model in `solver/src/motion_model.cpp`. If you see
+// `feasibility: INFEASIBLE`, either the catalog can't satisfy the task
+// (check the printed pallet/box numbers) or the reach proxy was
+// tightened — re-read the candidate-selection comments in
 // solver/src/arm_strategy.cpp.
 
 #include <filesystem>
@@ -56,6 +57,7 @@ int main() {
             },
             .box_count = 24,
         },
+        .target_ct_per_item = tc::CycleTimePerItem{5.0 * si::second},
     };
 
     std::cout << "Task: " << palletize.id << " (Palletize, 24 boxes @ 5 kg each)\n\n";
@@ -74,8 +76,8 @@ int main() {
     }
     std::cout << std::fixed << std::setprecision(2);
     std::cout << "  cycle_time:       " << r.cycle_time.numerical_value_in(si::second)
-              << " s (placeholder, real model in step 4)\n";
+              << " s (coarse motion model; calibration deferred)\n";
     std::cout << "  energy_per_cycle: " << r.energy_per_cycle.numerical_value_in(si::joule)
-              << " J (placeholder, real model in step 4)\n";
+              << " J (coarse motion model; calibration deferred)\n";
     return 0;
 }

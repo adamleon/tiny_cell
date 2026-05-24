@@ -132,7 +132,7 @@ tc::ReachEnvelope read_reach_envelope(const json& j, const std::filesystem::path
     }
     return tc::ReachEnvelope{
         .min_radius = min_m * si::metre,
-        .max_radius = max_m * si::metre,
+        .max_radius = tc::ReachRadius{max_m * si::metre},
     };
 }
 
@@ -148,7 +148,8 @@ tc::PusherSpec parse_pusher_spec(const json& j, const std::filesystem::path& src
         .controller_class = read_non_empty_string(j, "controller_class", src),
         .footprint = read_footprint_polygon(j, src),
         .stroke = read_positive_double(j, "stroke_m", src) * si::metre,
-        .payload_max = read_positive_double(j, "payload_max_kg", src) * si::kilogram,
+        .payload_max = tc::Payload{
+            read_positive_double(j, "payload_max_kg", src) * si::kilogram},
         .cycle_time_per_push =
             read_positive_double(j, "cycle_time_per_push_s", src) * si::second,
         .power_peak = read_positive_double(j, "power_peak_w", src) * si::watt,
@@ -169,7 +170,8 @@ tc::ArmSpec parse_arm_spec(const json& j, const std::filesystem::path& src) {
         .controller_class = read_non_empty_string(j, "controller_class", src),
         .footprint = read_footprint_polygon(j, src),
         .reach = read_reach_envelope(j, src),
-        .payload_max = read_positive_double(j, "payload_max_kg", src) * si::kilogram,
+        .payload_max = tc::Payload{
+            read_positive_double(j, "payload_max_kg", src) * si::kilogram},
         .mass = read_positive_double(j, "mass_kg", src) * si::kilogram,
         .max_speed = read_positive_double(j, "max_speed_m_s", src) * (si::metre / si::second),
         .max_acceleration = read_positive_double(j, "max_acceleration_m_s2", src)

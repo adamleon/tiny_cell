@@ -36,8 +36,8 @@ int main() {
         for (const auto& arm : entries) {
             std::cout << std::left << std::setw(22) << arm.id << std::setw(12) << arm.family
                       << std::right << std::fixed << std::setprecision(3) << std::setw(10)
-                      << arm.reach.max_radius.numerical_value_in(si::metre) << std::setprecision(1)
-                      << std::setw(12) << arm.payload_max.numerical_value_in(si::kilogram)
+                      << arm.reach.max_radius.value().numerical_value_in(si::metre) << std::setprecision(1)
+                      << std::setw(12) << arm.payload_max.value().numerical_value_in(si::kilogram)
                       << std::setw(14) << arm.list_price_eur << "\n";
         }
         return 0;

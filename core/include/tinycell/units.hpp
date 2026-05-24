@@ -3,8 +3,10 @@
 // Type aliases for the SI quantities used throughout core/. Each alias is a
 // strongly-typed quantity (e.g. `Length{1.5 * si::metre}`) — assigning a Mass
 // to a Length is a compile error. Range invariants (positivity, etc.) are NOT
-// enforced here; those land in validated value-type wrappers at step 4
-// (decisions.md, "validated value types staged in at step 4").
+// enforced here; those live in validated value-type wrappers — see
+// `model/validated.hpp` for the wrappers currently in use (Payload,
+// ReachRadius, CycleTimePerItem). Additional wrappers are added field-by-field
+// as new solver code consumes each invariant.
 //
 // Stripping a quantity to a plain double is allowed ONLY at boundaries:
 // io/ (parsing), render/ adapters (foreign libraries). Anywhere in core/ or

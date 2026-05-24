@@ -1,9 +1,12 @@
 #include "tinycell/solver/arm_strategy.hpp"
 
+#include "motion_model.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <mp-units/systems/si.h>
 #include <stdexcept>
+#include <vector>
 
 namespace tinycell::solver {
 
@@ -12,50 +15,20 @@ namespace {
 using namespace mp_units;
 namespace tc = tinycell::core;
 
-// PLACEHOLDER (step 4): seconds-per-box is a flat 3 s and the duty cycle is
-// a flat 0.6 (60% of cycle time at peak power, 40% at idle). Real analytic
-// per-archetype throughput + energy models arrive at step 4 with Layer 2
-// (decisions.md, "PARTIAL feasibility staged to step 4"). These constants
-// exist only to exercise the StrategyResult plumbing and produce numbers
-// you can eyeball in tests and the demo — they are NOT load-bearing.
-constexpr double placeholder_seconds_per_box = 3.0;
-constexpr double placeholder_arm_active_duty_fraction = 0.6;
-
-// select_arm():
-//   1. for each arm in the catalog
-//   2.   reject if payload_max < item.mass (can't lift it)
-//   3.   reject if reach.max_radius < half the pallet diagonal
-//        (rough proxy — see PLACEHOLDER note below)
-//   4. among remaining arms, return the one with the lowest list_price_eur
-// Returns nullptr if no arm satisfies both filters.
+// One feasible-on-physical-grounds arm candidate paired with its per-pick
+// motion-model output. The strategy walks the candidate list in price
+// order to choose between FULL (cheapest arm meeting the target rate)
+// and PARTIAL (cheapest feasible arm if none meets the target).
 //
-// PLACEHOLDER (step 4-5): the reach check is the half-pallet-diagonal proxy.
-// A centred arm with max_radius ≥ half-diagonal can reach the pallet corners
-// in principle, but real reachability depends on the arm's specific work
+// PLACEHOLDER (step 4-5): the reach feasibility uses the half-pallet-
+// diagonal proxy; real reachability depends on the arm's specific work
 // envelope (min reach, joint limits, ground/post obstacles), which comes
-// from precomputed workspace tables (architecture.md §5, the COROS-2020
-// sphere-collision approach). Arms close to the boundary here may turn out
-// infeasible when real reach is computed.
-const tc::ArmSpec* select_arm(const tc::PalletizeParams& p,
-                              std::span<const tc::ArmSpec> catalog) {
-    const auto pallet_diagonal_m = std::sqrt(
-        std::pow(p.pallet.physical.width.numerical_value_in(si::metre), 2) +
-        std::pow(p.pallet.physical.length.numerical_value_in(si::metre), 2));
-
-    const tc::ArmSpec* best = nullptr;
-    for (const auto& arm : catalog) {
-        if (arm.payload_max < p.item.physical.mass) {
-            continue;
-        }
-        if (arm.reach.max_radius.numerical_value_in(si::metre) < 0.5 * pallet_diagonal_m) {
-            continue;
-        }
-        if (best == nullptr || arm.list_price_eur < best->list_price_eur) {
-            best = &arm;
-        }
-    }
-    return best;
-}
+// from precomputed workspace tables (architecture.md §5). Arms close to
+// the proxy boundary may turn out infeasible at Layer 3.
+struct ArmCandidate {
+    const tc::ArmSpec* arm;
+    MotionCycle per_pick;
+};
 
 // State-flow contract for ArmStrategy on a Palletize task:
 //   * requires_state — the arm needs to know where to grasp the item AND
@@ -114,51 +87,121 @@ bool ArmStrategy::applies_to(const tc::Task& task) const {
 }
 
 // evaluate(): produces a candidate proposal for the given task.
-//   1. precondition check — task must be one we apply to
-//   2. for a Palletize task, pick the cheapest feasible arm via select_arm
-//   3. if no arm is feasible, return INFEASIBLE with zero metrics (still
-//      carrying the state-flow contract — see arm_requires_state /
-//      arm_palletize_effect above)
-//   4. otherwise compute placeholder cycle_time and energy_per_cycle and
-//      return FULL with the chosen arm as candidate equipment
+//   1. precondition check — task must be one we apply to.
+//   2. gather feasible arms (passing payload + half-pallet-diagonal reach
+//      proxy), each with its per-pick motion-model output.
+//   3. if no arm is feasible → INFEASIBLE (carrying state-flow contract).
+//   4. sort feasible arms cheapest-first.
+//   5. walk in price order: first arm whose per-item cycle time meets the
+//      task's target_ct_per_item → FULL with that arm.
+//   6. if no arm meets target → PARTIAL with the cheapest feasible arm,
+//      emitting a residual Palletize task whose target is tightened so
+//      that another instance covering it (in parallel) completes the
+//      original rate. Residual math: with achievable a and target t per
+//      item, this arm covers fraction t/a of the demand; the residual
+//      must cover (a-t)/a of the demand at the same rate, giving residual
+//      per-item time (a*t)/(a-t).
 StrategyResult ArmStrategy::evaluate(const tc::Task& task) const {
     if (!applies_to(task)) {
         throw std::logic_error("ArmStrategy::evaluate called on inapplicable task");
     }
     const auto& p = std::get<tc::PalletizeParams>(task.params);
 
-    const auto* arm = select_arm(p, catalog_);
-    if (arm == nullptr) {
+    // One-way pick→drop distance as the half-pallet-diagonal proxy. Layer 3
+    // will replace this with actual placed-geometry distance; same seam.
+    const auto pallet_diagonal_m = std::sqrt(
+        std::pow(p.pallet.physical.width.numerical_value_in(si::metre), 2) +
+        std::pow(p.pallet.physical.length.numerical_value_in(si::metre), 2));
+    const auto one_way_distance = (0.5 * pallet_diagonal_m) * si::metre;
+
+    std::vector<ArmCandidate> candidates;
+    for (const auto& arm : catalog_) {
+        if (arm.payload_max.value() < p.item.physical.mass) {
+            continue;
+        }
+        if (arm.reach.max_radius.value().numerical_value_in(si::metre)
+            < 0.5 * pallet_diagonal_m) {
+            continue;
+        }
+        candidates.push_back(ArmCandidate{
+            .arm = &arm,
+            .per_pick = arm_motion_cycle(one_way_distance, p.item.physical.mass, arm),
+        });
+    }
+
+    const auto state_in = arm_requires_state(p.item.physical.symmetry);
+    const auto effect_out = arm_palletize_effect();
+
+    if (candidates.empty()) {
         return StrategyResult{
             .feasibility = Feasibility::INFEASIBLE,
             .strategy_name = std::string{name()},
             .equipment = std::nullopt,
             .energy_per_cycle = 0.0 * si::joule,
             .cycle_time = 0.0 * si::second,
-            .requires_state = arm_requires_state(p.item.physical.symmetry),
-            .effect = arm_palletize_effect(),
+            .achievable_ct_per_item = 0.0 * si::second,
+            .partial_info = std::nullopt,
+            .preconditions = {},
+            .requires_state = state_in,
+            .effect = effect_out,
         };
     }
 
-    // PLACEHOLDER (step 4): cycle_time and energy_per_cycle come from flat
-    // constants, not a real model. See the placeholder_* constants above.
-    const auto cycle_time = placeholder_seconds_per_box
-                            * static_cast<double>(p.box_count) * si::second;
-    const auto active_seconds = cycle_time.numerical_value_in(si::second)
-                                * placeholder_arm_active_duty_fraction;
-    const auto idle_seconds = cycle_time.numerical_value_in(si::second) - active_seconds;
-    const auto energy_j =
-        arm->power_peak.numerical_value_in(si::watt) * active_seconds +
-        arm->power_idle.numerical_value_in(si::watt) * idle_seconds;
+    // Strategy returns ONE proposal per call (data-model.md §2); the OR-tree
+    // explores alternatives via other strategies on the same task, not by
+    // fanning out here.
+    std::sort(candidates.begin(), candidates.end(),
+              [](const ArmCandidate& a, const ArmCandidate& b) {
+                  return a.arm->list_price_eur < b.arm->list_price_eur;
+              });
+
+    const auto target = task.target_ct_per_item.value();
+    const auto box_count = static_cast<double>(p.box_count);
+
+    // FULL: cheapest arm whose per-item cycle time meets the target.
+    for (const auto& c : candidates) {
+        if (c.per_pick.cycle_time <= target) {
+            return StrategyResult{
+                .feasibility = Feasibility::FULL,
+                .strategy_name = std::string{name()},
+                .equipment = EquipmentRef{.catalog_id = c.arm->id},
+                .energy_per_cycle = c.per_pick.energy_per_cycle * box_count,
+                .cycle_time = c.per_pick.cycle_time * box_count,
+                .achievable_ct_per_item = c.per_pick.cycle_time,
+                .partial_info = std::nullopt,
+                .preconditions = {},
+                .requires_state = state_in,
+                .effect = effect_out,
+            };
+        }
+    }
+
+    // PARTIAL: no arm meets target — propose the cheapest feasible arm,
+    // emit a residual whose target is tightened per the math above.
+    const auto& best = candidates.front();
+    const auto a_s = best.per_pick.cycle_time.numerical_value_in(si::second);
+    const auto t_s = target.numerical_value_in(si::second);
+    const auto residual_target_s = (a_s * t_s) / (a_s - t_s);
+
+    tc::Task residual = task;
+    residual.id = task.id + "_residual";
+    residual.target_ct_per_item = tc::CycleTimePerItem{residual_target_s * si::second};
+    residual.is_residual = true;
 
     return StrategyResult{
-        .feasibility = Feasibility::FULL,
+        .feasibility = Feasibility::PARTIAL,
         .strategy_name = std::string{name()},
-        .equipment = EquipmentRef{.catalog_id = arm->id},
-        .energy_per_cycle = energy_j * si::joule,
-        .cycle_time = cycle_time,
-        .requires_state = arm_requires_state(p.item.physical.symmetry),
-        .effect = arm_palletize_effect(),
+        .equipment = EquipmentRef{.catalog_id = best.arm->id},
+        .energy_per_cycle = best.per_pick.energy_per_cycle * box_count,
+        .cycle_time = best.per_pick.cycle_time * box_count,
+        .achievable_ct_per_item = best.per_pick.cycle_time,
+        .partial_info = PartialInfo{
+            .achievable_ct_per_item = best.per_pick.cycle_time,
+            .target_ct_per_item = target,
+        },
+        .preconditions = {residual},
+        .requires_state = state_in,
+        .effect = effect_out,
     };
 }
 

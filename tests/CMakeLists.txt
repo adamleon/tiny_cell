@@ -56,3 +56,21 @@ target_compile_definitions(test_state_propagation PRIVATE
     TINYCELL_REPO_ROOT="${CMAKE_SOURCE_DIR}"
 )
 add_test(NAME test_state_propagation COMMAND test_state_propagation)
+
+add_executable(test_allocator test_allocator.cpp)
+target_link_libraries(test_allocator PRIVATE
+    TinyCell::core
+    TinyCell::solver
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_allocator COMMAND test_allocator)
+
+add_executable(test_cost test_cost.cpp)
+target_link_libraries(test_cost PRIVATE
+    TinyCell::core
+    TinyCell::solver
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_cost COMMAND test_cost)

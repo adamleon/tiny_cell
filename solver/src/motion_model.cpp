@@ -9,9 +9,10 @@ namespace {
 using namespace mp_units;
 namespace tc = tinycell::core;
 
-// PLACEHOLDER (step 4): coarse constants sized for sensible orderings
-// on toy problems, not realistic absolutes. Real calibrated numbers
-// arrive later without changing this seam — see motion_model.hpp.
+// Coarse constants sized for sensible orderings on toy problems, not
+// realistic absolutes. Real calibrated numbers arrive when calibration
+// data lands (see decisions.md "Model-vs-reality safety margin
+// deferred"); the motion-model seam does not change.
 constexpr double arm_pick_place_overhead_seconds = 1.0;
 constexpr double arm_active_duty_fraction = 0.6;
 constexpr double pusher_active_duty_fraction = 0.4;

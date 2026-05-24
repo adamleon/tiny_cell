@@ -1,10 +1,12 @@
 #pragma once
 
 // Validated value-type wrappers — layer on mp-units quantities with range
-// invariants enforced at construction. See architecture.md §8 and the
-// decisions.md entry "Validated value types staged in at step 4..." for
-// why this layer arrives now (Layer 2 is the first point where solver
-// code can emit a value that fails a range invariant).
+// invariants enforced at construction. See architecture.md §8 for the
+// design and the decisions.md "Validated value types staged in at step 4"
+// entry for why this layer first arrives at Layer 2 (the first point
+// where solver code can emit a value that fails a range invariant). The
+// current set covers fields Layer 2 touches; additional wrappers are
+// added as new solver code consumes each invariant.
 //
 // Pattern: one wrapper per CONCEPT, not one per unit-quantity. An arm's
 // payload capacity and an item's mass are both in kilograms but model

@@ -32,10 +32,10 @@ namespace tinycell::solver {
 enum class Feasibility { FULL, PARTIAL, INFEASIBLE };
 
 // EquipmentRef names a specific catalog entry by id. A strategy proposes
-// this as a CANDIDATE binding, not a commitment — Layer 2 (allocation,
-// step 4) decides whether one physical instance is reused across tasks.
-// Committing inside the strategy would foreclose cross-task instance
-// sharing (data-model.md §2, "candidate binding, not commitment").
+// this as a CANDIDATE binding, not a commitment — the Layer-2 allocator
+// (`solver/allocator.hpp`) decides whether one physical instance is reused
+// across tasks. Committing inside the strategy would foreclose cross-task
+// instance sharing (data-model.md §2, "candidate binding, not commitment").
 struct EquipmentRef {
     std::string catalog_id;
 };

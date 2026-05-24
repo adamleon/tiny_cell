@@ -29,7 +29,7 @@ struct ReachEnvelope {
 // MODEL (e.g. "KUKA KR6 R900-2"). Multiple placed arms in a cell may share
 // one ArmSpec; their per-instance pose lives on a future ArmInstance type.
 // Fields mirror data-model.md §3 plus arm-specific extras (mass, lifetime,
-// regen capability) needed by the cost model in step 4.
+// regen capability) consumed by the Layer-2 cost model (`solver/cost.hpp`).
 struct ArmSpec {
     std::string id;
     std::string model_name;

@@ -3,13 +3,16 @@
 // Brute-force enumerator — the validator of the strategy library (roadmap.md
 // step 2). Given a workflow (a list of Tasks) and a set of Strategy
 // implementations, asks every applicable strategy to evaluate every task and
-// records the proposals plus the chosen winner per task.
+// records the proposals plus the chosen winner per task. The output is also
+// the Layer-2 allocator's input — sharing emerges across tasks that pick the
+// same catalog entry.
 //
-// The point of step 2 is NOT to compute realistic plans (the throughput /
-// cost model arrives at step 4, decisions.md). It's to (a) exercise every
-// strategy on a non-trivial set of tasks and (b) expose what real consumers
-// will need from StrategyResult. The output shape — all proposals + a
-// winner index — surfaces both:
+// The original step-2 point was to validate strategy matching and equipment
+// selection on toy tasks. With step 4 the enumerator additionally walks
+// PARTIAL chains: when a task's winner is PARTIAL, the residual sub-task in
+// `winner.preconditions` is recursively enumerated and appended to the flat
+// output (DFS order, capped at MAX_PARTIAL_CHAIN_DEPTH). The output shape —
+// all proposals + a winner index — surfaces both:
 //   * "no winner" reveals tasks no strategy can serve (strategy library hole)
 //   * the proposals list lets the demo print a side-by-side comparison that
 //     would be hidden if only the winner were returned

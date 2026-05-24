@@ -3,9 +3,11 @@
 // Pusher domain types. A pusher is a linear actuator that transfers an item
 // across a short distance — typically off a feeder onto a pallet, conveyor, or
 // fixture. Mirrors the ArmSpec shape but trimmed to the fields PusherStrategy
-// actually consumes today; reach/orientation concepts that arms have don't
-// apply, and TCO fields (mass / lifetime / maintenance / regen) are deferred
-// to step 4 along with the real cost model (decisions.md).
+// actually consumes; reach/orientation concepts that arms have don't apply.
+// TCO fields (mass / lifetime / maintenance / regen) remain deferred — the
+// Layer-2 cost model currently uses uniform LifetimeAssumptions across
+// equipment types rather than per-spec lifetime; add per-spec fields when
+// real-world calibration data justifies the heterogeneity.
 
 #include <string>
 #include <tinycell/geometry.hpp>

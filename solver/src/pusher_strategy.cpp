@@ -88,9 +88,10 @@ RowLayout layout_for_alignment(const tc::PalletizeParams& p, int alignment) {
 // symmetric items the two layout computations produce identical
 // results; we still return 0 to keep the canonical convention.
 //
-// PLACEHOLDER (step 4): "favourable" is currently more-boxes-per-row.
-// A real cost model would weigh row-count against stroke distance,
-// energy per push, and row payload against catalog availability.
+// FUTURE: "favourable" is currently more-boxes-per-row. A richer
+// model would weigh row-count against stroke distance, energy per
+// push, and row payload against catalog availability — landing at
+// the same time as the motion-model calibration work.
 int pick_required_alignment(const tc::PalletizeParams& p) {
     const auto a0 = layout_for_alignment(p, 0);
     const auto a1 = layout_for_alignment(p, 1);
@@ -164,8 +165,9 @@ const tc::PusherSpec* select_pusher(const tc::PalletizeParams& p,
 // == 0` short-circuit on the chosen alignment). A `pushable` flag on
 // BoxSpec would let pushable-INFEASIBLE be reported pre-catalog like
 // the pattern guard, but BoxSpec carries no such flag yet.
-// PLACEHOLDER (step 4): add `pushable: bool` to BoxSpec and short-
-// circuit non-pushable items here before catalog lookup.
+// FUTURE: add `pushable: bool` to BoxSpec and short-circuit non-
+// pushable items here before catalog lookup. Not yet in scope —
+// arrives when a concrete non-pushable item lands.
 RequiresStateFn pusher_requires_state(tc::RotationalSymmetry item_symmetry,
                                       int required_alignment) {
     return [item_symmetry, required_alignment](const tc::ItemState& s) {

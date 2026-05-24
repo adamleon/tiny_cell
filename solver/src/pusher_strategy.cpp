@@ -104,13 +104,21 @@ int pick_required_alignment(const tc::PalletizeParams& p) {
 //        simultaneously)
 //   3.   reject if stroke < required_stroke (the pusher must traverse
 //        one pallet row in a single extension)
-//   4. among remaining pushers, return the one with the lowest list_price_eur
-// Returns nullptr if no pusher satisfies both filters.
+//   4.   reject if cycle_time_per_push > target_per_stroke — a pusher
+//        slower than the per-item target (scaled to per-stroke by
+//        boxes_per_row) cannot return FULL, and pushers never emit
+//        PARTIAL (decisions.md "Pusher strategies emit only FULL or
+//        INFEASIBLE")
+//   5. among remaining pushers, return the one with the lowest list_price_eur
+// Returns nullptr if no pusher satisfies all three filters.
 const tc::PusherSpec* select_pusher(const tc::PalletizeParams& p,
                                     const RowLayout& layout,
+                                    tc::Duration target_ct_per_item,
                                     std::span<const tc::PusherSpec> catalog) {
     const auto required_stroke =
         std::min(p.pallet.physical.width, p.pallet.physical.length);
+    const auto target_per_stroke =
+        target_ct_per_item * static_cast<double>(layout.boxes_per_row);
 
     const tc::PusherSpec* best = nullptr;
     for (const auto& pusher : catalog) {
@@ -118,6 +126,9 @@ const tc::PusherSpec* select_pusher(const tc::PalletizeParams& p,
             continue;
         }
         if (pusher.stroke < required_stroke) {
+            continue;
+        }
+        if (pusher.cycle_time_per_push > target_per_stroke) {
             continue;
         }
         if (best == nullptr || pusher.list_price_eur < best->list_price_eur) {
@@ -189,8 +200,17 @@ std::string_view PusherStrategy::name() const { return "PusherStrategy"; }
 // willing to solve. Today that's Palletize only; PushOff and short-
 // distance Transport are the obvious additions when those task kinds
 // come online.
+//
+// Refuses residual tasks (those spawned by another strategy's PARTIAL
+// result): a pusher physically owns its station and cannot supplement
+// another strategy or be supplemented by another pusher in the same
+// station (decisions.md "Pusher strategies emit only FULL or
+// INFEASIBLE; refuse residual tasks"). When a residual cannot find an
+// arm or other chainable strategy to absorb it, the eventual answer is
+// station replication, not a second pusher (decisions.md "Station-
+// splitting mechanism deferred").
 bool PusherStrategy::applies_to(const tc::Task& task) const {
-    return task.kind() == tc::TaskKind::Palletize;
+    return task.kind() == tc::TaskKind::Palletize && !task.is_residual;
 }
 
 // evaluate(): produces a candidate proposal for the given task.
@@ -236,7 +256,8 @@ StrategyResult PusherStrategy::evaluate(const tc::Task& task) const {
         };
     }
 
-    const auto* pusher = select_pusher(p, layout, catalog_);
+    const auto* pusher = select_pusher(
+        p, layout, task.target_ct_per_item.value(), catalog_);
     if (pusher == nullptr) {
         return StrategyResult{
             .feasibility = Feasibility::INFEASIBLE,
@@ -271,8 +292,9 @@ StrategyResult PusherStrategy::evaluate(const tc::Task& task) const {
     // station and cannot supplement another strategy or be supplemented
     // by another pusher in the same station (decisions.md "Pusher
     // strategies emit only FULL or INFEASIBLE; refuse residual tasks").
-    // The rate gate that converts "too slow" into INFEASIBLE lands with
-    // the applies_to refusal for residuals in the next commit.
+    // A pusher too slow to meet target_ct_per_item is rejected inside
+    // select_pusher and the INFEASIBLE branch above is taken; the
+    // FULL return below is only reached when the rate is satisfied.
     return StrategyResult{
         .feasibility = Feasibility::FULL,
         .strategy_name = std::string{name()},

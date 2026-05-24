@@ -1,5 +1,7 @@
 #include "tinycell/solver/arm_strategy.hpp"
 
+#include "motion_model.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <mp-units/systems/si.h>
@@ -11,15 +13,6 @@ namespace {
 
 using namespace mp_units;
 namespace tc = tinycell::core;
-
-// PLACEHOLDER (step 4): seconds-per-box is a flat 3 s and the duty cycle is
-// a flat 0.6 (60% of cycle time at peak power, 40% at idle). Real analytic
-// per-archetype throughput + energy models arrive at step 4 with Layer 2
-// (decisions.md, "PARTIAL feasibility staged to step 4"). These constants
-// exist only to exercise the StrategyResult plumbing and produce numbers
-// you can eyeball in tests and the demo — they are NOT load-bearing.
-constexpr double placeholder_seconds_per_box = 3.0;
-constexpr double placeholder_arm_active_duty_fraction = 0.6;
 
 // select_arm():
 //   1. for each arm in the catalog
@@ -141,22 +134,25 @@ StrategyResult ArmStrategy::evaluate(const tc::Task& task) const {
         };
     }
 
-    // PLACEHOLDER (step 4): cycle_time and energy_per_cycle come from flat
-    // constants, not a real model. See the placeholder_* constants above.
-    const auto cycle_time = placeholder_seconds_per_box
-                            * static_cast<double>(p.box_count) * si::second;
-    const auto active_seconds = cycle_time.numerical_value_in(si::second)
-                                * placeholder_arm_active_duty_fraction;
-    const auto idle_seconds = cycle_time.numerical_value_in(si::second) - active_seconds;
-    const auto energy_j =
-        arm->power_peak.numerical_value_in(si::watt) * active_seconds +
-        arm->power_idle.numerical_value_in(si::watt) * idle_seconds;
+    // One-way pick→drop distance as half the pallet diagonal (mirrors the
+    // reach-feasibility proxy in select_arm). Layer 3 will replace this
+    // with the actual placed-geometry distance; the seam stays the same.
+    const auto pallet_diagonal_m = std::sqrt(
+        std::pow(p.pallet.physical.width.numerical_value_in(si::metre), 2) +
+        std::pow(p.pallet.physical.length.numerical_value_in(si::metre), 2));
+    const auto one_way_distance = (0.5 * pallet_diagonal_m) * si::metre;
+
+    const auto per_pick = arm_motion_cycle(
+        one_way_distance, p.item.physical.mass, *arm);
+    const auto box_count = static_cast<double>(p.box_count);
+    const auto cycle_time = per_pick.cycle_time * box_count;
+    const auto energy_per_cycle = per_pick.energy_per_cycle * box_count;
 
     return StrategyResult{
         .feasibility = Feasibility::FULL,
         .strategy_name = std::string{name()},
         .equipment = EquipmentRef{.catalog_id = arm->id},
-        .energy_per_cycle = energy_j * si::joule,
+        .energy_per_cycle = energy_per_cycle,
         .cycle_time = cycle_time,
         .requires_state = arm_requires_state(p.item.physical.symmetry),
         .effect = arm_palletize_effect(),

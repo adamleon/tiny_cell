@@ -2,6 +2,7 @@ add_library(tinycell_solver STATIC
     src/arm_strategy.cpp
     src/pusher_strategy.cpp
     src/enumerator.cpp
+    src/motion_model.cpp
     src/state_propagation.cpp
 )
 target_include_directories(tinycell_solver PUBLIC

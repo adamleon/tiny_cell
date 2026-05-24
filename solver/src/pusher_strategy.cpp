@@ -1,5 +1,7 @@
 #include "tinycell/solver/pusher_strategy.hpp"
 
+#include "motion_model.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <mp-units/systems/si.h>
@@ -11,13 +13,6 @@ namespace {
 
 using namespace mp_units;
 namespace tc = tinycell::core;
-
-// PLACEHOLDER (step 4): the active duty fraction is a flat 0.4. A pusher
-// extends + retracts + dwells; the active stroke is roughly the extend
-// portion. Real per-archetype throughput / energy models arrive at step 4
-// with Layer 2 (decisions.md). Constant exists only to exercise the
-// StrategyResult plumbing — NOT load-bearing.
-constexpr double placeholder_pusher_active_duty_fraction = 0.4;
 
 // Equipment-model assumption: a row of boxes accumulates on an in-feed
 // belt against an end stop. When the row is full, the belt stops and
@@ -252,24 +247,21 @@ StrategyResult PusherStrategy::evaluate(const tc::Task& task) const {
         };
     }
 
-    // PLACEHOLDER (step 4): cycle_time = cycle_time_per_push × num_rows
-    // counts only push events; in-feed accumulation between pushes is
-    // assumed to overlap perfectly. Real throughput model in step 4
-    // will couple in-feed rate, pusher cycle, and pallet advance.
-    const auto cycle_time =
-        pusher->cycle_time_per_push * static_cast<double>(layout.num_rows);
-    const auto active_seconds = cycle_time.numerical_value_in(si::second)
-                                * placeholder_pusher_active_duty_fraction;
-    const auto idle_seconds = cycle_time.numerical_value_in(si::second) - active_seconds;
-    const auto energy_j =
-        pusher->power_peak.numerical_value_in(si::watt) * active_seconds +
-        pusher->power_idle.numerical_value_in(si::watt) * idle_seconds;
+    // One stroke transfers one row; cycle_time / energy for the whole
+    // task is per_stroke × num_rows. In-feed accumulation between
+    // strokes is assumed to overlap perfectly; a real throughput model
+    // coupling in-feed rate, pusher cycle, and pallet advance will
+    // replace the body of pusher_motion_cycle in step 5+.
+    const auto per_stroke = pusher_motion_cycle(layout.row_payload, *pusher);
+    const auto num_rows = static_cast<double>(layout.num_rows);
+    const auto cycle_time = per_stroke.cycle_time * num_rows;
+    const auto energy_per_cycle = per_stroke.energy_per_cycle * num_rows;
 
     return StrategyResult{
         .feasibility = Feasibility::FULL,
         .strategy_name = std::string{name()},
         .equipment = EquipmentRef{.catalog_id = pusher->id},
-        .energy_per_cycle = energy_j * si::joule,
+        .energy_per_cycle = energy_per_cycle,
         .cycle_time = cycle_time,
         .requires_state = pusher_requires_state(
             p.item.physical.symmetry, required_alignment),

@@ -14,12 +14,14 @@
 // Reach feasibility is a Layer-3 concern (decisions.md "2D geometry for
 // MVP"); capacity is the only sharing constraint at Layer 2.
 //
-// PARTIAL chain walking is staged: today pick_winner inside the
-// enumerator only selects FULL, so the allocator only sees FULL
-// winners. Tasks whose only proposals are PARTIAL or INFEASIBLE end
-// up in `unallocated`. Commit 9 extends both the enumerator (so it
-// can pick PARTIAL when no FULL exists and walk residuals) and the
-// allocator's handling of the PARTIAL branch.
+// PARTIAL chain integration: the enumerator walks PARTIAL chains
+// before the allocator runs, surfacing residual TaskEnumerations
+// (with is_residual=true) in the input span. The allocator binds
+// PARTIAL winners the same way as FULL — the difference is that a
+// PARTIAL primary's per-task demand exceeds the instance's capacity,
+// so task_fits rejects any subsequent sharing on that instance and
+// the residual (which appears next in DFS order) binds to its own
+// instance. The physical interpretation is "two units in parallel."
 //
 // Cost reporting against the bound instance set (one BoundInstance =
 // one physical equipment = one capex line) lands in commit 8.
@@ -70,12 +72,14 @@ struct AllocationResult {
 // allocate(): walk the per-task enumerations greedily, sharing where
 // capacity allows.
 //
-//   - No winner → task goes to `unallocated`.
-//   - FULL winner → try to fit on an existing instance with matching
-//     (catalog_id, strategy_name) and spare capacity for this task's
-//     rate; otherwise mint a new instance.
-//   - PARTIAL winner → today routed to `unallocated` (placeholder);
-//     commit 9 wires up the chain walk through `preconditions`.
+//   - No winner / INFEASIBLE → `unallocated`.
+//   - FULL or PARTIAL winner → try to fit on an existing instance
+//     with matching (catalog_id, strategy_name) and spare capacity
+//     for this task's rate; otherwise mint a new instance. PARTIAL
+//     primaries naturally fail the share check (their committed rate
+//     exceeds capacity) so they always mint a fresh instance, and
+//     their residuals (which follow in DFS order) likewise mint
+//     their own.
 AllocationResult allocate(std::span<const TaskEnumeration> per_task);
 
 } // namespace tinycell::solver

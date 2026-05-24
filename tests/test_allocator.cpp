@@ -76,6 +76,27 @@ ts::StrategyResult make_full_result(const std::string& strategy_name,
     };
 }
 
+ts::StrategyResult make_partial_result(const std::string& strategy_name,
+                                       const std::string& catalog_id,
+                                       double achievable_s_per_item,
+                                       double target_s_per_item) {
+    return ts::StrategyResult{
+        .feasibility = ts::Feasibility::PARTIAL,
+        .strategy_name = strategy_name,
+        .equipment = ts::EquipmentRef{.catalog_id = catalog_id},
+        .energy_per_cycle = 1000.0 * si::joule,
+        .cycle_time = 24.0 * achievable_s_per_item * si::second,
+        .achievable_ct_per_item = achievable_s_per_item * si::second,
+        .partial_info = ts::PartialInfo{
+            .achievable_ct_per_item = achievable_s_per_item * si::second,
+            .target_ct_per_item = target_s_per_item * si::second,
+        },
+        .preconditions = {},  // residual handled separately in tests
+        .requires_state = [](const tc::ItemState&) { return true; },
+        .effect = [](const tc::ItemState& s) { return s; },
+    };
+}
+
 ts::StrategyResult make_infeasible_result(const std::string& strategy_name) {
     return ts::StrategyResult{
         .feasibility = ts::Feasibility::INFEASIBLE,
@@ -177,6 +198,34 @@ TEST(Allocator, SameCatalogIdSharesWhenCapacityAllows) {
     ASSERT_EQ(inst.served.size(), 2U);
     EXPECT_EQ(inst.served[0].task_id, "ta");
     EXPECT_EQ(inst.served[1].task_id, "tb");
+}
+
+TEST(Allocator, PartialWinnerBindsAndForcesNewInstanceForResidual) {
+    // PARTIAL primary at achievable 2 s/item, target 1 s/item → demand
+    // 1 items/sec exceeds the instance's 0.5 items/sec capacity, so
+    // task_fits rejects sharing. A second task with the same catalog
+    // id (e.g. the residual) gets its own fresh instance.
+    auto primary = make_task("primary", 1.0);
+    auto residual = make_task("primary_residual", 2.4);  // residual_target loosened
+    residual.is_residual = true;
+
+    auto te_primary = make_enumeration(
+        primary, make_partial_result("ArmStrategy", "arm_a", 2.0, 1.0), true);
+    auto te_residual = make_enumeration(
+        residual, make_full_result("ArmStrategy", "arm_a", 2.0), true);
+
+    std::vector<ts::TaskEnumeration> input;
+    input.push_back(std::move(te_primary));
+    input.push_back(std::move(te_residual));
+
+    auto result = ts::allocate(input);
+
+    ASSERT_EQ(result.instances.size(), 2U);
+    EXPECT_TRUE(result.unallocated.empty());
+    EXPECT_EQ(result.instances[0].served.size(), 1U);
+    EXPECT_EQ(result.instances[0].served[0].task_id, "primary");
+    EXPECT_EQ(result.instances[1].served.size(), 1U);
+    EXPECT_EQ(result.instances[1].served[0].task_id, "primary_residual");
 }
 
 TEST(Allocator, SameCatalogIdDoesNotShareWhenCapacityExceeded) {

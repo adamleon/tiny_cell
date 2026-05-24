@@ -45,16 +45,20 @@ AllocationResult allocate(std::span<const TaskEnumeration> per_task) {
         }
         const auto& winner = te.proposals[*te.winner_index];
 
-        if (winner.feasibility != Feasibility::FULL) {
-            // PLACEHOLDER (commit 9): PARTIAL chain walking — when
-            // pick_winner can pick PARTIAL (no FULL available) the
-            // allocator descends into winner.preconditions and binds
-            // each residual recursively. Today pick_winner only picks
-            // FULL so this branch is unreachable; routing to
-            // `unallocated` keeps the output well-defined.
+        if (winner.feasibility == Feasibility::INFEASIBLE) {
+            // pick_winner shouldn't select INFEASIBLE, but defensive:
+            // route to unallocated rather than fabricate a binding.
             result.unallocated.push_back(te.task.id);
             continue;
         }
+        // FULL and PARTIAL are both bindable. The PARTIAL primary's
+        // residual is already in the enumerator output as a separate
+        // TaskEnumeration with is_residual=true; iterating in DFS
+        // order, it lands on its own instance because task_fits
+        // rejects sharing with a PARTIAL primary (its committed rate
+        // already exceeds the instance's capacity, so spare is
+        // negative). The residual binds as a new instance — the
+        // physical interpretation: two arms in parallel.
         if (!winner.equipment) {
             // A FULL result with no equipment is a strategy bug, not
             // the allocator's concern — route to `unallocated` rather

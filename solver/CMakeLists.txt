@@ -1,6 +1,7 @@
 add_library(tinycell_solver STATIC
     src/allocator.cpp
     src/arm_strategy.cpp
+    src/cost.cpp
     src/pusher_strategy.cpp
     src/enumerator.cpp
     src/motion_model.cpp

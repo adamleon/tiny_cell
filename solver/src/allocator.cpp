@@ -68,6 +68,7 @@ AllocationResult allocate(std::span<const TaskEnumeration> per_task) {
         BoundInstance::ServedTask st{
             .task_id = te.task->id,
             .target_ct_per_item = target,
+            .achievable_ct_per_item = winner.achievable_ct_per_item,
             .cycle_time = winner.cycle_time,
             .energy_per_cycle = winner.energy_per_cycle,
         };

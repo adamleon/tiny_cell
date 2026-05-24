@@ -65,3 +65,12 @@ target_link_libraries(test_allocator PRIVATE
     GTest::gtest_main
 )
 add_test(NAME test_allocator COMMAND test_allocator)
+
+add_executable(test_cost test_cost.cpp)
+target_link_libraries(test_cost PRIVATE
+    TinyCell::core
+    TinyCell::solver
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_cost COMMAND test_cost)

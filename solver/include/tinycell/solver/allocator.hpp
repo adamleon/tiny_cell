@@ -38,10 +38,16 @@ namespace tinycell::solver {
 // units; sharing collapses what would have been multiple instances
 // into one.
 struct BoundInstance {
-    // Per-task contribution of this instance.
+    // Per-task contribution of this instance. `achievable_ct_per_item`
+    // is THIS task's achievable on this instance (the arm's per-item
+    // time when serving this task), which can differ from the
+    // instance's stored `achievable_ct_per_item` when tasks have
+    // different pick distances on the same arm. Cost calc uses the
+    // per-task value to compute utilization correctly.
     struct ServedTask {
         std::string task_id;
         core::Duration target_ct_per_item;
+        core::Duration achievable_ct_per_item;
         core::Duration cycle_time;
         core::Energy energy_per_cycle;
     };

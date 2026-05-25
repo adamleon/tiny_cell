@@ -1,0 +1,9 @@
+{
+  "name": "tinycell-layer3-spike",
+  "version-string": "0.1.0",
+  "description": "Layer-3 optimizer PoC: build IPOPT and NLopt on Windows via vcpkg",
+  "dependencies": [
+    "coin-or-ipopt",
+    "nlopt"
+  ]
+}

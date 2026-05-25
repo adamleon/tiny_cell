@@ -39,6 +39,28 @@ struct LogicalPort {
     PortDirection direction;
 };
 
+// PortConstraint — a strategy's concrete realization of a logical
+// port for the specific binding it proposes. Lives on
+// StrategyResult.port_constraints; the Layer-3 placer (Phase D) reads
+// it to position Transport endpoints and check direction tolerances.
+//
+// Coordinates are in the BOUND INSTANCE'S STATION FRAME (the instance
+// sits at some pose in that frame; for the one-instance-per-station
+// pattern current at MVP, that frame's origin is the instance's
+// origin). theta names the direction items flow through this port at
+// the moment they cross it. direction_tolerance bounds how much the
+// connected transport's direction may deviate from theta — 0 means
+// strict alignment (e.g. pusher stroke is fixed), pi/2 means any
+// direction within ±90° works (e.g. an arm can pick from anywhere
+// within its reach).
+struct PortConstraint {
+    std::string port_name;        // matches a LogicalPort.name on the task
+    Length x;
+    Length y;
+    Angle theta;                  // port "flow direction" in the station frame
+    Angle direction_tolerance;    // 0 = strict; pi/2 = any-direction-within-reach
+};
+
 // Derive the logical port set for a task from its kind. Each task
 // kind has a fixed port set (this is what makes ports "task-level" —
 // they're a property of the goal shape, not of the equipment chosen

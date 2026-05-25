@@ -1,7 +1,11 @@
+#include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <gtest/gtest.h>
 #include <mp-units/systems/si.h>
+#include <numbers>
 #include <tinycell/io/catalog_loader.hpp>
+#include <tinycell/model/port.hpp>
 #include <tinycell/model/task.hpp>
 #include <tinycell/solver/arm_strategy.hpp>
 #include <tinycell/solver/pusher_strategy.hpp>
@@ -221,4 +225,83 @@ TEST(PusherStrategy, InfeasibleWhenBoxTooWideForPalletRow) {
     p.item.physical.length = 0.6 * si::metre;
     auto result = strategy.evaluate(task);
     EXPECT_EQ(result.feasibility, ts::Feasibility::INFEASIBLE);
+}
+
+// ---- Port constraints emitted by strategies (T.3) -----------------------
+
+namespace {
+const tc::PortConstraint* find_port(const std::vector<tc::PortConstraint>& v,
+                                    const std::string& name) {
+    auto it = std::find_if(v.begin(), v.end(),
+        [&](const tc::PortConstraint& c) { return c.port_name == name; });
+    return it == v.end() ? nullptr : &*it;
+}
+} // namespace
+
+TEST(ArmStrategy, FeasibleResultEmitsLoosePortConstraints) {
+    auto arms = kuka_arms();
+    ts::ArmStrategy strategy(arms);
+    auto result = strategy.evaluate(small_palletize_task());
+    ASSERT_EQ(result.feasibility, ts::Feasibility::FULL);
+    // One PortConstraint per LogicalPort the Palletize task declares.
+    EXPECT_EQ(result.port_constraints.size(), 3u);
+    EXPECT_NE(find_port(result.port_constraints, "item_in"),    nullptr);
+    EXPECT_NE(find_port(result.port_constraints, "pallet_in"),  nullptr);
+    EXPECT_NE(find_port(result.port_constraints, "pallet_out"), nullptr);
+    // Arm direction tolerance is pi/2 — items can come from any
+    // direction within the reach envelope.
+    for (const auto& c : result.port_constraints) {
+        EXPECT_NEAR(c.direction_tolerance.numerical_value_in(si::radian),
+                    std::numbers::pi / 2.0, 1e-9);
+    }
+}
+
+TEST(ArmStrategy, InfeasibleResultHasNoPortConstraints) {
+    auto arms = kuka_arms();
+    ts::ArmStrategy strategy(arms);
+    auto task = small_palletize_task();
+    auto& p = std::get<tc::PalletizeParams>(task.params);
+    p.item.physical.mass = 1000.0 * si::kilogram;  // exceeds every catalog payload
+    auto result = strategy.evaluate(task);
+    ASSERT_EQ(result.feasibility, ts::Feasibility::INFEASIBLE);
+    EXPECT_TRUE(result.port_constraints.empty());
+}
+
+TEST(PusherStrategy, FeasibleResultEmitsStrictPortsWithPerpendicularPalletDirection) {
+    auto pushers = generic_pushers();
+    ts::PusherStrategy strategy(pushers);
+    auto result = strategy.evaluate(small_palletize_task());
+    ASSERT_EQ(result.feasibility, ts::Feasibility::FULL);
+    ASSERT_EQ(result.port_constraints.size(), 3u);
+
+    const auto* item_in = find_port(result.port_constraints, "item_in");
+    const auto* pallet_in = find_port(result.port_constraints, "pallet_in");
+    const auto* pallet_out = find_port(result.port_constraints, "pallet_out");
+    ASSERT_NE(item_in, nullptr);
+    ASSERT_NE(pallet_in, nullptr);
+    ASSERT_NE(pallet_out, nullptr);
+
+    // All directions strict: zero tolerance.
+    EXPECT_NEAR(item_in->direction_tolerance.numerical_value_in(si::radian),    0.0, 1e-9);
+    EXPECT_NEAR(pallet_in->direction_tolerance.numerical_value_in(si::radian),  0.0, 1e-9);
+    EXPECT_NEAR(pallet_out->direction_tolerance.numerical_value_in(si::radian), 0.0, 1e-9);
+
+    // item_in along the pusher's "behind" axis (theta = 0); pallet_in
+    // and pallet_out perpendicular (theta = pi/2). This is the
+    // pusher-must-be-attached-to-item-belt-with-perpendicular-pallet-belt
+    // rule expressed in the type system.
+    EXPECT_NEAR(item_in->theta.numerical_value_in(si::radian),    0.0, 1e-9);
+    EXPECT_NEAR(pallet_in->theta.numerical_value_in(si::radian),  std::numbers::pi / 2.0, 1e-9);
+    EXPECT_NEAR(pallet_out->theta.numerical_value_in(si::radian), std::numbers::pi / 2.0, 1e-9);
+}
+
+TEST(PusherStrategy, InfeasibleResultHasNoPortConstraints) {
+    auto pushers = generic_pushers();
+    ts::PusherStrategy strategy(pushers);
+    auto task = small_palletize_task();
+    auto& p = std::get<tc::PalletizeParams>(task.params);
+    p.item.physical.mass = 1000.0 * si::kilogram;
+    auto result = strategy.evaluate(task);
+    ASSERT_EQ(result.feasibility, ts::Feasibility::INFEASIBLE);
+    EXPECT_TRUE(result.port_constraints.empty());
 }

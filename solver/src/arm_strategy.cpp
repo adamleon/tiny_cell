@@ -5,7 +5,9 @@
 #include <algorithm>
 #include <cmath>
 #include <mp-units/systems/si.h>
+#include <numbers>
 #include <stdexcept>
+#include <tinycell/model/port.hpp>
 #include <vector>
 
 namespace tinycell::solver {
@@ -14,6 +16,28 @@ namespace {
 
 using namespace mp_units;
 namespace tc = tinycell::core;
+
+// Arm-emitted PortConstraints for a Palletize task. Arms can pick/place
+// from anywhere within their reach envelope, so direction tolerance is
+// pi/2 (any direction within +/- 90 degrees works) — the arm rotates to
+// service the connected transport's direction. All three ports sit at
+// the station origin (= the arm base for the one-instance-per-station
+// pattern current at MVP); refinements to non-origin positions arrive
+// when the placer needs more spatial precision (Phase D or later).
+std::vector<tc::PortConstraint> arm_palletize_port_constraints() {
+    constexpr auto kLoose = (std::numbers::pi / 2.0) * si::radian;
+    return {
+        {.port_name = "item_in",
+         .x = 0.0 * si::metre, .y = 0.0 * si::metre,
+         .theta = 0.0 * si::radian, .direction_tolerance = kLoose},
+        {.port_name = "pallet_in",
+         .x = 0.0 * si::metre, .y = 0.0 * si::metre,
+         .theta = 0.0 * si::radian, .direction_tolerance = kLoose},
+        {.port_name = "pallet_out",
+         .x = 0.0 * si::metre, .y = 0.0 * si::metre,
+         .theta = 0.0 * si::radian, .direction_tolerance = kLoose},
+    };
+}
 
 // One feasible-on-physical-grounds arm candidate paired with its per-pick
 // motion-model output. The strategy walks the candidate list in price
@@ -144,6 +168,8 @@ StrategyResult ArmStrategy::evaluate(const tc::Task& task) const {
             .preconditions = {},
             .requires_state = state_in,
             .effect = effect_out,
+            // INFEASIBLE: no binding, no concrete port constraints. The
+            // port_constraints default-initialises to empty.
         };
     }
 
@@ -172,6 +198,7 @@ StrategyResult ArmStrategy::evaluate(const tc::Task& task) const {
                 .preconditions = {},
                 .requires_state = state_in,
                 .effect = effect_out,
+                .port_constraints = arm_palletize_port_constraints(),
             };
         }
     }
@@ -202,6 +229,7 @@ StrategyResult ArmStrategy::evaluate(const tc::Task& task) const {
         .preconditions = {residual},
         .requires_state = state_in,
         .effect = effect_out,
+        .port_constraints = arm_palletize_port_constraints(),
     };
 }
 

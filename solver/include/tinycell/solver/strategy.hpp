@@ -14,6 +14,7 @@
 #include <string>
 #include <string_view>
 #include <tinycell/model/item.hpp>
+#include <tinycell/model/port.hpp>
 #include <tinycell/model/task.hpp>
 #include <tinycell/units.hpp>
 #include <vector>
@@ -119,6 +120,16 @@ struct StrategyResult {
     std::vector<core::Task> preconditions;
     RequiresStateFn requires_state;
     EffectFn effect;
+
+    // port_constraints — one PortConstraint per LogicalPort the task
+    // declared (task_ports(task)), each naming where this strategy's
+    // chosen equipment places that port + how strict the direction is.
+    // Empty on INFEASIBLE — there's no binding to constrain. The
+    // Layer-3 placer reads these to score / validate Transport edges
+    // (Phase D). Arms emit wide-tolerance ports (any direction inside
+    // their reach works); pushers emit strict-direction ports (stroke
+    // axis is fixed by the equipment).
+    std::vector<core::PortConstraint> port_constraints;
 };
 
 // Strategy — abstract base for all engineering-knowledge encoders. Concrete

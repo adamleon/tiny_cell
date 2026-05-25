@@ -5,7 +5,9 @@
 #include <algorithm>
 #include <cmath>
 #include <mp-units/systems/si.h>
+#include <numbers>
 #include <stdexcept>
+#include <tinycell/model/port.hpp>
 
 namespace tinycell::solver {
 
@@ -13,6 +15,33 @@ namespace {
 
 using namespace mp_units;
 namespace tc = tinycell::core;
+
+// Pusher-emitted PortConstraints for a Palletize task. A pusher owns
+// its station's geometry — the item belt feeds items in along the
+// pusher's "behind" axis (call it theta=0 in station frame), and the
+// pallet belt runs perpendicular (theta=pi/2). Both directions are
+// STRICT (tolerance = 0) because a pusher's stroke is open-loop and
+// the in-feed alignment + pallet flow direction are physical
+// constants of the binding, not a free parameter the placer can
+// rotate. All three ports sit at station origin at MVP; non-origin
+// refinement (e.g. item_in offset to the pusher mouth, pallet_in
+// offset to the pallet position) arrives when the placer needs the
+// extra spatial precision.
+std::vector<tc::PortConstraint> pusher_palletize_port_constraints() {
+    constexpr auto kStrict = 0.0 * si::radian;
+    constexpr auto kPerpendicular = (std::numbers::pi / 2.0) * si::radian;
+    return {
+        {.port_name = "item_in",
+         .x = 0.0 * si::metre, .y = 0.0 * si::metre,
+         .theta = 0.0 * si::radian, .direction_tolerance = kStrict},
+        {.port_name = "pallet_in",
+         .x = 0.0 * si::metre, .y = 0.0 * si::metre,
+         .theta = kPerpendicular, .direction_tolerance = kStrict},
+        {.port_name = "pallet_out",
+         .x = 0.0 * si::metre, .y = 0.0 * si::metre,
+         .theta = kPerpendicular, .direction_tolerance = kStrict},
+    };
+}
 
 // Equipment-model assumption: a row of boxes accumulates on an in-feed
 // belt against an end stop. When the row is full, the belt stops and
@@ -309,6 +338,7 @@ StrategyResult PusherStrategy::evaluate(const tc::Task& task) const {
         .requires_state = pusher_requires_state(
             p.item.physical.symmetry, required_alignment),
         .effect = pusher_palletize_effect(),
+        .port_constraints = pusher_palletize_port_constraints(),
     };
 }
 

@@ -175,3 +175,29 @@ TEST(Frames, ResolveRejectsOutOfRangeFrame) {
     core::FrameTable table;
     EXPECT_THROW(table.resolve_to_world(core::FrameId{999}), std::invalid_argument);
 }
+
+TEST(Frames, ApplyPolygonTransformsEveryVertex) {
+    // A unit square at origin, transformed by a 90° rotation, must land
+    // rotated 90° about origin. (1,0) → (0,1); (1,1) → (-1,1);
+    // (0,1) → (-1,0); (0,0) → (0,0).
+    core::Polygon square{
+        core::Vec2{0.0 * metre, 0.0 * metre},
+        core::Vec2{1.0 * metre, 0.0 * metre},
+        core::Vec2{1.0 * metre, 1.0 * metre},
+        core::Vec2{0.0 * metre, 1.0 * metre},
+    };
+    core::Transform2D rot90{0.0 * metre, 0.0 * metre,
+                            (std::numbers::pi / 2.0) * radian};
+    auto out = core::apply(rot90, square);
+    ASSERT_EQ(out.size(), 4u);
+    EXPECT_TRUE(near(out[0].x, 0.0) && near(out[0].y, 0.0));
+    EXPECT_TRUE(near(out[1].x, 0.0) && near(out[1].y, 1.0));
+    EXPECT_TRUE(near(out[2].x, -1.0) && near(out[2].y, 1.0));
+    EXPECT_TRUE(near(out[3].x, -1.0) && near(out[3].y, 0.0));
+}
+
+TEST(Frames, ApplyPolygonEmptyInputProducesEmptyOutput) {
+    core::Polygon empty;
+    auto out = core::apply(core::Transform2D::identity(), empty);
+    EXPECT_TRUE(out.empty());
+}

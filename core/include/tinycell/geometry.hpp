@@ -87,6 +87,14 @@ struct Transform2D {
     }
 };
 
+// Transform every vertex of a polygon by `t`. Used when a station's
+// world transform is known (frame-cache build time) and an instance
+// footprint expressed in the station frame needs to land in world
+// coords — the one-transform-per-station pattern that keeps the LNS
+// inner loop off `express()` (CLAUDE.md §1, solver.md "Where each
+// layer flattens"). Returns a fresh polygon; the input is unchanged.
+inline Polygon apply(const Transform2D& t, const Polygon& in);
+
 inline Vec2 apply(const Transform2D& t, const Vec2& p) {
     using namespace mp_units;
     const double c = std::cos(t.theta.numerical_value_in(si::radian));
@@ -102,6 +110,15 @@ inline Vec2 apply(const Transform2D& t, const Vec2& p) {
         (c * px - s * py + tx_m) * si::metre,
         (s * px + c * py + ty_m) * si::metre,
     };
+}
+
+inline Polygon apply(const Transform2D& t, const Polygon& in) {
+    Polygon out;
+    out.reserve(in.size());
+    for (const auto& v : in) {
+        out.push_back(apply(t, v));
+    }
+    return out;
 }
 
 // Compose two transforms — applying compose(A, B) to a point p produces

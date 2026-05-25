@@ -34,4 +34,10 @@ using Duration = quantity<isq::time[si::second]>;
 // the UI / cost-display boundary so unit-mixing bugs are impossible.
 using Energy = quantity<isq::energy[si::joule]>;
 
+// Angle: stored in radians. Catalog/UI conventions (degrees) are converted
+// at the io/ and UI boundaries, never in core/ or solver/ (units.hpp top
+// note). Used by port direction constraints + future frame-composition
+// math (architecture.md §4).
+using Angle = quantity<isq::angular_measure[si::radian]>;
+
 } // namespace tinycell::core

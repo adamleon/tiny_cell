@@ -74,3 +74,11 @@ target_link_libraries(test_cost PRIVATE
     GTest::gtest_main
 )
 add_test(NAME test_cost COMMAND test_cost)
+
+add_executable(test_ports test_ports.cpp)
+target_link_libraries(test_ports PRIVATE
+    TinyCell::core
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_ports COMMAND test_ports)

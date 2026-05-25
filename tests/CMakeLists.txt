@@ -82,3 +82,12 @@ target_link_libraries(test_ports PRIVATE
     GTest::gtest_main
 )
 add_test(NAME test_ports COMMAND test_ports)
+
+add_executable(test_transfer_strategy test_transfer_strategy.cpp)
+target_link_libraries(test_transfer_strategy PRIVATE
+    TinyCell::core
+    TinyCell::solver
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_transfer_strategy COMMAND test_transfer_strategy)

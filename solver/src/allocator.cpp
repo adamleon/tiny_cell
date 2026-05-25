@@ -71,6 +71,22 @@ AllocationResult allocate(std::span<const TaskEnumeration> per_task) {
             continue;
         }
 
+        // Anchor tasks (T.7): pinned world poses, no equipment to
+        // bind. The placer reads these to fix the anchor "station's"
+        // world coords (and refuses to optimise over them).
+        if (te.task.kind() == tc::TaskKind::Anchor) {
+            const auto& a = std::get<tc::AnchorParams>(te.task.params);
+            result.anchors.push_back(PinnedAnchor{
+                .task_id = te.task.id,
+                .name = a.name,
+                .world_x = a.world_x,
+                .world_y = a.world_y,
+                .world_theta = a.world_theta,
+                .role = a.role,
+            });
+            continue;
+        }
+
         // FULL and PARTIAL are both bindable. The PARTIAL primary's
         // residual is already in the enumerator output as a separate
         // TaskEnumeration with is_residual=true; iterating in DFS

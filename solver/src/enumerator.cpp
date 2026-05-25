@@ -30,8 +30,21 @@ std::optional<std::size_t> pick_winner(const std::vector<StrategyResult>& propos
 }
 
 // Recurse on one task: evaluate strategies, pick winner, append a
-// TaskEnumeration to `out`, then recurse on each residual the winner
-// emitted (only when the winner is PARTIAL and depth remains).
+// TaskEnumeration to `out`, then recurse on every precondition the
+// winner emitted (depth-bounded).
+//
+// Preconditions take two shapes:
+//   * PARTIAL residuals  — ArmStrategy emits a smaller copy of the
+//                          same task with a tightened target when no
+//                          single arm can meet the rate alone. Same
+//                          task kind, different params.
+//   * Structural preconds — strategies emit Transport tasks (T.6) or
+//                          other prerequisite tasks the binding can't
+//                          run without. Different task kind.
+// Both flow through StrategyResult.preconditions; both must be
+// enumerated. The earlier "only on PARTIAL" guard was a leftover
+// from when residuals were the only precondition shape and dropped
+// FULL-spawned structural preconds (T.7-pre-bugfix).
 void enumerate_recursive(const core::Task& task,
                          std::span<const Strategy* const> strategies,
                          std::size_t depth_remaining,
@@ -44,19 +57,16 @@ void enumerate_recursive(const core::Task& task,
     }
     te.winner_index = pick_winner(te.proposals);
 
-    // Capture residuals before moving `te` into `out`.
-    std::vector<core::Task> residuals;
+    // Capture preconditions before moving `te` into `out`.
+    std::vector<core::Task> preconds;
     if (te.winner_index && depth_remaining > 0) {
-        const auto& winner = te.proposals[*te.winner_index];
-        if (winner.feasibility == Feasibility::PARTIAL) {
-            residuals = winner.preconditions;
-        }
+        preconds = te.proposals[*te.winner_index].preconditions;
     }
 
     out.push_back(std::move(te));
 
-    for (const auto& r : residuals) {
-        enumerate_recursive(r, strategies, depth_remaining - 1, out);
+    for (const auto& p : preconds) {
+        enumerate_recursive(p, strategies, depth_remaining - 1, out);
     }
 }
 

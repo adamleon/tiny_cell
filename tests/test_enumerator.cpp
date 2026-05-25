@@ -7,6 +7,7 @@
 #include <tinycell/solver/arm_strategy.hpp>
 #include <tinycell/solver/enumerator.hpp>
 #include <tinycell/solver/pusher_strategy.hpp>
+#include <tinycell/solver/transfer_strategy.hpp>
 
 namespace {
 
@@ -65,12 +66,18 @@ TEST(Enumerator, RunsBothStrategiesPerTask) {
     auto pushers = generic_pushers();
     ts::ArmStrategy arm(arms);
     ts::PusherStrategy pusher(pushers);
-    const std::vector<const ts::Strategy*> strategies{&arm, &pusher};
+    ts::TransferStrategy transfer;
+    // TransferStrategy is registered so the Transport precondition the
+    // pusher spawns on FULL (T.6) doesn't end up without a winner; that
+    // would be tested separately, not pollute this assertion.
+    const std::vector<const ts::Strategy*> strategies{&arm, &pusher, &transfer};
 
     const std::vector<tc::Task> workflow{make_palletize("t0", 5.0, 1.2, 0.8, 24)};
     auto results = ts::enumerate(workflow, strategies);
 
-    ASSERT_EQ(results.size(), 1U);
+    // The first entry IS the workflow's palletize task — additional
+    // entries are the strategy-spawned preconditions (T.6).
+    ASSERT_GE(results.size(), 1U);
     EXPECT_EQ(results[0].task.id, workflow[0].id);
     EXPECT_EQ(results[0].proposals.size(), 2U);
     // Both strategies applies_to Palletize, so both proposals must be present.
@@ -83,12 +90,15 @@ TEST(Enumerator, PicksWinnerByLowestEnergy) {
     auto pushers = generic_pushers();
     ts::ArmStrategy arm(arms);
     ts::PusherStrategy pusher(pushers);
-    const std::vector<const ts::Strategy*> strategies{&arm, &pusher};
+    ts::TransferStrategy transfer;
+    const std::vector<const ts::Strategy*> strategies{&arm, &pusher, &transfer};
 
     const std::vector<tc::Task> workflow{make_palletize("t0", 5.0, 1.2, 0.8, 24)};
     auto results = ts::enumerate(workflow, strategies);
 
-    ASSERT_EQ(results.size(), 1U);
+    // results[0] is the workflow's palletize task; later entries are
+    // spawned preconditions (Transport from the pusher, T.6).
+    ASSERT_GE(results.size(), 1U);
     ASSERT_TRUE(results[0].winner_index.has_value());
     const auto& winner = results[0].proposals[*results[0].winner_index];
     EXPECT_EQ(winner.feasibility, ts::Feasibility::FULL);
@@ -201,7 +211,8 @@ TEST(EnumeratorAllocator, SharingWinsOnIdenticalTasks) {
     auto pushers = generic_pushers();
     ts::ArmStrategy arm(arms);
     ts::PusherStrategy pusher(pushers);
-    const std::vector<const ts::Strategy*> strategies{&arm, &pusher};
+    ts::TransferStrategy transfer;
+    const std::vector<const ts::Strategy*> strategies{&arm, &pusher, &transfer};
 
     const std::vector<tc::Task> workflow{
         make_palletize("t_a", 5.0, 1.2, 0.8, 24),
@@ -212,6 +223,11 @@ TEST(EnumeratorAllocator, SharingWinsOnIdenticalTasks) {
 
     ASSERT_EQ(allocation.instances.size(), 1U);
     EXPECT_EQ(allocation.instances[0].served.size(), 2U);
+    // Pusher-bound palletize tasks spawn Transport preconditions (T.6);
+    // those land in allocation.transports as TransportEdges (T.5), not
+    // in instances or unallocated. The shared-instance assertion above
+    // is unchanged.
+    EXPECT_EQ(allocation.transports.size(), 2U);
     EXPECT_TRUE(allocation.unallocated.empty());
 }
 
@@ -220,7 +236,8 @@ TEST(Enumerator, PreservesWorkflowOrder) {
     auto pushers = generic_pushers();
     ts::ArmStrategy arm(arms);
     ts::PusherStrategy pusher(pushers);
-    const std::vector<const ts::Strategy*> strategies{&arm, &pusher};
+    ts::TransferStrategy transfer;
+    const std::vector<const ts::Strategy*> strategies{&arm, &pusher, &transfer};
 
     const std::vector<tc::Task> workflow{
         make_palletize("first",  5.0, 1.2, 0.8, 24),
@@ -229,8 +246,19 @@ TEST(Enumerator, PreservesWorkflowOrder) {
     };
     auto results = ts::enumerate(workflow, strategies);
 
-    ASSERT_EQ(results.size(), 3U);
-    EXPECT_EQ(results[0].task.id, "first");
-    EXPECT_EQ(results[1].task.id, "second");
-    EXPECT_EQ(results[2].task.id, "third");
+    // Each pusher-bound palletize spawns one Transport precondition
+    // (T.6) which lands in DFS order right after its parent. The
+    // workflow order is preserved on the original-task entries; the
+    // spawned Transports interleave between them but don't displace.
+    // Pick the original tasks out by Palletize kind + workflow id.
+    std::vector<std::string> palletize_ids;
+    for (const auto& r : results) {
+        if (r.task.kind() == tc::TaskKind::Palletize && !r.task.is_residual) {
+            palletize_ids.push_back(r.task.id);
+        }
+    }
+    ASSERT_EQ(palletize_ids.size(), 3U);
+    EXPECT_EQ(palletize_ids[0], "first");
+    EXPECT_EQ(palletize_ids[1], "second");
+    EXPECT_EQ(palletize_ids[2], "third");
 }

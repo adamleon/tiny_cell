@@ -29,6 +29,7 @@
 #include <cstddef>
 #include <span>
 #include <string>
+#include <tinycell/model/port.hpp>
 #include <tinycell/solver/enumerator.hpp>
 #include <tinycell/units.hpp>
 #include <vector>
@@ -61,6 +62,21 @@ struct BoundInstance {
     std::vector<ServedTask> served;
 };
 
+// PinnedAnchor — the allocator's record of an Anchor task (T.7). An
+// anchor pins a workflow node to a fixed world pose (feeder, dispatch);
+// it carries no equipment and no cost, but Layer-3 needs to know the
+// world coordinates to pin the anchor station and to score transports
+// connected to it. Endpoints of TransportEdges that reference anchors
+// resolve to the pose recorded here.
+struct PinnedAnchor {
+    std::string task_id;
+    std::string name;
+    core::Length world_x;
+    core::Length world_y;
+    core::Angle world_theta;
+    core::PortDirection role;
+};
+
 // TransportEdge — the allocator's record of a Transport task. Unlike
 // a BoundInstance, a TransportEdge binds no physical equipment (the
 // magical TransferStrategy at MVP, future BeltStrategy as an
@@ -79,12 +95,15 @@ struct TransportEdge {
 };
 
 // AllocationResult — the allocator's output. `instances` holds bound
-// physical units; `transports` holds connectivity edges between bound
-// tasks (no equipment yet, see TransportEdge); `unallocated` holds
-// task ids the allocator could not place (no FULL chain found).
+// physical units; `transports` holds connectivity edges between
+// tasks (no equipment yet, see TransportEdge); `anchors` holds
+// world-pinned workflow nodes (feeders, dispatches);
+// `unallocated` holds task ids the allocator could not place (no
+// FULL chain found).
 struct AllocationResult {
     std::vector<BoundInstance> instances;
     std::vector<TransportEdge> transports;
+    std::vector<PinnedAnchor> anchors;
     std::vector<std::string> unallocated;
 };
 

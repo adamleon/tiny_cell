@@ -14,6 +14,11 @@
 #include <tinycell/units.hpp>
 #include <variant>
 
+// PortDirection lives in model/port.hpp, but AnchorParams below needs
+// it. Forward-declare here to avoid a circular include
+// (port.hpp includes task.hpp for task_ports()).
+namespace tinycell::core { enum class PortDirection; }
+
 namespace tinycell::core {
 
 // PalletizeParams — "place box_count boxes of `item` onto a `pallet`". The
@@ -47,11 +52,33 @@ struct TransportParams {
     std::string sink_port_name;
 };
 
-using TaskParams = std::variant<PalletizeParams, TransportParams>;
+// AnchorParams — a workflow node pinned to a specific world pose,
+// representing material that enters or leaves the cell at a fixed
+// location (a feeder belt's start, a dispatch zone). Used as the
+// source or sink endpoint of a Transport task when the actual
+// upstream / downstream is outside the cell.
+//
+// `role` says whether items flow OUT of the anchor (Output — a
+// feeder) or IN to it (Input — a dispatch). task_ports(Anchor)
+// returns one port named "port" with this direction.
+//
+// The world pose is pinned at workflow-definition time and the
+// placer does NOT optimise over it — Layer-3 treats Anchor stations
+// as constants. world_theta is the direction items flow at the
+// anchor (the anchor's "port flow direction" in world coords).
+struct AnchorParams {
+    std::string name;
+    PortDirection role;
+    Length world_x;
+    Length world_y;
+    Angle world_theta;
+};
+
+using TaskParams = std::variant<PalletizeParams, TransportParams, AnchorParams>;
 
 // Discriminator mirroring TaskParams' alternatives. Add a value here AND a
 // case to Task::kind() in lockstep when a new task kind is introduced.
-enum class TaskKind { Palletize, Transport };
+enum class TaskKind { Palletize, Transport, Anchor };
 
 // Task — one goal the solver must produce a strategy for. `params` carries
 // the kind-specific data; `kind()` reports the discriminator (useful for
@@ -85,6 +112,9 @@ struct Task {
         }
         if (std::holds_alternative<TransportParams>(params)) {
             return TaskKind::Transport;
+        }
+        if (std::holds_alternative<AnchorParams>(params)) {
+            return TaskKind::Anchor;
         }
         // Reachable only if TaskParams gets a new alternative without a
         // matching case here — guard against the mistake.

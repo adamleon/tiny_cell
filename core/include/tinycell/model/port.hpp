@@ -89,6 +89,12 @@ inline std::vector<LogicalPort> task_ports(const Task& t) {
         // doesn't expose its own logical ports. Its TransportParams
         // already names the source/sink endpoints by reference.
         return {};
+    case TaskKind::Anchor:
+        // Anchor declares ONE port named "port" with the role from
+        // its AnchorParams (Output for a feeder, Input for a
+        // dispatch). The Transport that connects to this anchor
+        // references it by source/sink port name "port".
+        return {{"port", std::get<AnchorParams>(t.params).role}};
     }
     // Unreachable if every TaskKind has a case above; if a new kind
     // is added without updating this switch, the compile-time

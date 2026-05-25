@@ -110,6 +110,43 @@ TEST(Ports, TransportParamsCarryEndpointReferences) {
     EXPECT_EQ(p.sink_port_name, "pallet_in");
 }
 
+TEST(Ports, AnchorOutputRoleHasOneOutputPort) {
+    tc::Task a{
+        .id = "feeder",
+        .params = tc::AnchorParams{
+            .name = "in_feed",
+            .role = tc::PortDirection::Output,
+            .world_x = 0.0 * metre,
+            .world_y = 0.0 * metre,
+            .world_theta = 0.0 * mp_units::si::radian,
+        },
+        .target_ct_per_item = tc::CycleTimePerItem{1.0 * second},
+    };
+    EXPECT_EQ(a.kind(), tc::TaskKind::Anchor);
+    auto ports = tc::task_ports(a);
+    ASSERT_EQ(ports.size(), 1u);
+    EXPECT_EQ(ports[0].name, "port");
+    EXPECT_EQ(ports[0].direction, tc::PortDirection::Output);
+}
+
+TEST(Ports, AnchorInputRoleHasOneInputPort) {
+    tc::Task a{
+        .id = "dispatch",
+        .params = tc::AnchorParams{
+            .name = "out_dispatch",
+            .role = tc::PortDirection::Input,
+            .world_x = 10.0 * metre,
+            .world_y = 0.0 * metre,
+            .world_theta = 0.0 * mp_units::si::radian,
+        },
+        .target_ct_per_item = tc::CycleTimePerItem{1.0 * second},
+    };
+    auto ports = tc::task_ports(a);
+    ASSERT_EQ(ports.size(), 1u);
+    EXPECT_EQ(ports[0].name, "port");
+    EXPECT_EQ(ports[0].direction, tc::PortDirection::Input);
+}
+
 TEST(Ports, AngleAliasCompilesAndStoresRadians) {
     // Smoke: the Angle alias works the same way as the other unit
     // aliases (mp_units quantity in radians).

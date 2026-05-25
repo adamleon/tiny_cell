@@ -91,3 +91,12 @@ target_link_libraries(test_transfer_strategy PRIVATE
     GTest::gtest_main
 )
 add_test(NAME test_transfer_strategy COMMAND test_transfer_strategy)
+
+add_executable(test_anchor_strategy test_anchor_strategy.cpp)
+target_link_libraries(test_anchor_strategy PRIVATE
+    TinyCell::core
+    TinyCell::solver
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_anchor_strategy COMMAND test_anchor_strategy)

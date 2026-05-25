@@ -27,11 +27,31 @@ struct PalletizeParams {
     int box_count;
 };
 
-using TaskParams = std::variant<PalletizeParams>;
+// TransportParams — "move items from source_task's output port to
+// sink_task's input port". The Transport task is the node that owns
+// the move; its strategy (TransferStrategy at MVP, BeltStrategy later)
+// realizes the physical path between the referenced ports.
+//
+// The Transport task itself exposes no logical ports of its own
+// (task_ports(Transport) returns empty in model/port.hpp): a Transport
+// is the EDGE between two other tasks' ports, not a node with its own
+// I/O channels. Referenced ports must exist on the named tasks and
+// have matching direction polarity (source_port_name must name an
+// output, sink_port_name must name an input). Validation is the
+// workflow author's responsibility at MVP; an io/-layer check can
+// land if authored bad data becomes a real risk.
+struct TransportParams {
+    std::string source_task_id;
+    std::string source_port_name;
+    std::string sink_task_id;
+    std::string sink_port_name;
+};
+
+using TaskParams = std::variant<PalletizeParams, TransportParams>;
 
 // Discriminator mirroring TaskParams' alternatives. Add a value here AND a
 // case to Task::kind() in lockstep when a new task kind is introduced.
-enum class TaskKind { Palletize };
+enum class TaskKind { Palletize, Transport };
 
 // Task — one goal the solver must produce a strategy for. `params` carries
 // the kind-specific data; `kind()` reports the discriminator (useful for
@@ -62,6 +82,9 @@ struct Task {
     TaskKind kind() const {
         if (std::holds_alternative<PalletizeParams>(params)) {
             return TaskKind::Palletize;
+        }
+        if (std::holds_alternative<TransportParams>(params)) {
+            return TaskKind::Transport;
         }
         // Reachable only if TaskParams gets a new alternative without a
         // matching case here — guard against the mistake.

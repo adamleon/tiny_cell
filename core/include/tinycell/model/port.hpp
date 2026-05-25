@@ -62,6 +62,11 @@ inline std::vector<LogicalPort> task_ports(const Task& t) {
             {"pallet_in",  PortDirection::Input},
             {"pallet_out", PortDirection::Output},
         };
+    case TaskKind::Transport:
+        // Transport is an EDGE between two other tasks' ports - it
+        // doesn't expose its own logical ports. Its TransportParams
+        // already names the source/sink endpoints by reference.
+        return {};
     }
     // Unreachable if every TaskKind has a case above; if a new kind
     // is added without updating this switch, the compile-time

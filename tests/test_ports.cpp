@@ -76,6 +76,40 @@ TEST(Ports, PalletizePortsAreStableAcrossInstances) {
     }
 }
 
+tc::Task make_transport(const std::string& id,
+                        const std::string& src_task, const std::string& src_port,
+                        const std::string& dst_task, const std::string& dst_port) {
+    return tc::Task{
+        .id = id,
+        .params = tc::TransportParams{
+            .source_task_id = src_task,
+            .source_port_name = src_port,
+            .sink_task_id = dst_task,
+            .sink_port_name = dst_port,
+        },
+        // Transport tasks are "magical" at MVP - TransferStrategy will
+        // hit any positive target. Workflow author can refine later.
+        .target_ct_per_item = tc::CycleTimePerItem{1.0 * second},
+    };
+}
+
+TEST(Ports, TransportTaskHasNoLogicalPorts) {
+    // A Transport is an edge between two other tasks' ports - it
+    // doesn't expose ports of its own.
+    auto t = make_transport("t_xport", "t_src", "pallet_out", "t_dst", "pallet_in");
+    EXPECT_EQ(t.kind(), tc::TaskKind::Transport);
+    EXPECT_TRUE(tc::task_ports(t).empty());
+}
+
+TEST(Ports, TransportParamsCarryEndpointReferences) {
+    auto t = make_transport("t_xport", "t_pallet_a", "pallet_out", "t_pallet_b", "pallet_in");
+    const auto& p = std::get<tc::TransportParams>(t.params);
+    EXPECT_EQ(p.source_task_id, "t_pallet_a");
+    EXPECT_EQ(p.source_port_name, "pallet_out");
+    EXPECT_EQ(p.sink_task_id, "t_pallet_b");
+    EXPECT_EQ(p.sink_port_name, "pallet_in");
+}
+
 TEST(Ports, AngleAliasCompilesAndStoresRadians) {
     // Smoke: the Angle alias works the same way as the other unit
     // aliases (mp_units quantity in radians).

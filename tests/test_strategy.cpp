@@ -305,3 +305,36 @@ TEST(PusherStrategy, InfeasibleResultHasNoPortConstraints) {
     ASSERT_EQ(result.feasibility, ts::Feasibility::INFEASIBLE);
     EXPECT_TRUE(result.port_constraints.empty());
 }
+
+TEST(PusherStrategy, FullResultSpawnsItemTransportPrecondition) {
+    auto pushers = generic_pushers();
+    ts::PusherStrategy strategy(pushers);
+    auto task = small_palletize_task();
+    auto result = strategy.evaluate(task);
+    ASSERT_EQ(result.feasibility, ts::Feasibility::FULL);
+
+    // Exactly one precondition: a Transport task delivering items into
+    // this palletize's item_in port. Source is open (workflow author's
+    // job to wire to a feeder or upstream task's output).
+    ASSERT_EQ(result.preconditions.size(), 1U);
+    const auto& pre = result.preconditions[0];
+    EXPECT_EQ(pre.id, task.id + "_item_transport");
+    EXPECT_EQ(pre.kind(), tc::TaskKind::Transport);
+    const auto& tp = std::get<tc::TransportParams>(pre.params);
+    EXPECT_EQ(tp.sink_task_id, task.id);
+    EXPECT_EQ(tp.sink_port_name, "item_in");
+    EXPECT_TRUE(tp.source_task_id.empty());
+    EXPECT_TRUE(tp.source_port_name.empty());
+    EXPECT_FALSE(pre.is_residual);
+}
+
+TEST(PusherStrategy, InfeasibleResultSpawnsNoPrecondition) {
+    auto pushers = generic_pushers();
+    ts::PusherStrategy strategy(pushers);
+    auto task = small_palletize_task();
+    auto& p = std::get<tc::PalletizeParams>(task.params);
+    p.item.physical.mass = 1000.0 * si::kilogram;
+    auto result = strategy.evaluate(task);
+    ASSERT_EQ(result.feasibility, ts::Feasibility::INFEASIBLE);
+    EXPECT_TRUE(result.preconditions.empty());
+}

@@ -16,6 +16,32 @@ namespace {
 using namespace mp_units;
 namespace tc = tinycell::core;
 
+// Build the Transport precondition the pusher spawns on FULL. A
+// pusher cannot operate without items being delivered to its
+// item_in port - the in-feed belt is a physical prerequisite, not
+// optional. Spawning this precondition makes the requirement
+// explicit in the OR-tree; the workflow author resolves the source
+// end (an Anchor at a feeder, an upstream task's output port). The
+// source_task_id is left EMPTY here: the pusher knows it needs
+// items but doesn't know where from - that's a workflow shape
+// question, not a strategy question.
+tc::Task pusher_item_transport_precondition(const tc::Task& task) {
+    return tc::Task{
+        .id = task.id + "_item_transport",
+        .params = tc::TransportParams{
+            .source_task_id = "",            // workflow author wires
+            .source_port_name = "",
+            .sink_task_id = task.id,
+            .sink_port_name = "item_in",
+        },
+        // Per-item rate matches the parent palletize task's target so
+        // the transport sized adequately. CycleTimePerItem validates
+        // > 0, so we inherit the parent's target.
+        .target_ct_per_item = task.target_ct_per_item,
+        .is_residual = false,
+    };
+}
+
 // Pusher-emitted PortConstraints for a Palletize task. A pusher owns
 // its station's geometry — the item belt feeds items in along the
 // pusher's "behind" axis (call it theta=0 in station frame), and the
@@ -334,7 +360,12 @@ StrategyResult PusherStrategy::evaluate(const tc::Task& task) const {
         .cycle_time = cycle_time,
         .achievable_ct_per_item = achievable_ct_per_item,
         .partial_info = std::nullopt,
-        .preconditions = {},
+        // The pusher cannot run without items arriving at its item_in.
+        // The Transport precondition is a real workflow task picked
+        // up by the enumerator and matched by TransferStrategy (or
+        // future BeltStrategy) - the in-feed is the OR-tree's
+        // responsibility now, not a layout assumption.
+        .preconditions = {pusher_item_transport_precondition(task)},
         .requires_state = pusher_requires_state(
             p.item.physical.symmetry, required_alignment),
         .effect = pusher_palletize_effect(),

@@ -61,11 +61,30 @@ struct BoundInstance {
     std::vector<ServedTask> served;
 };
 
+// TransportEdge — the allocator's record of a Transport task. Unlike
+// a BoundInstance, a TransportEdge binds no physical equipment (the
+// magical TransferStrategy at MVP, future BeltStrategy as an
+// upgrade); it just carries the workflow-level connection so the
+// Layer-3 placer can score transfer length and check direction
+// compatibility at the connected ports (T.2/T.3). Endpoint references
+// are copied from the Transport task's TransportParams so consumers
+// don't have to walk back to the workflow.
+struct TransportEdge {
+    std::string task_id;
+    std::string source_task_id;
+    std::string source_port_name;
+    std::string sink_task_id;
+    std::string sink_port_name;
+    std::string strategy_name;  // "TransferStrategy" at MVP
+};
+
 // AllocationResult — the allocator's output. `instances` holds bound
-// physical units; `unallocated` holds task ids the allocator could not
-// place (no FULL chain found).
+// physical units; `transports` holds connectivity edges between bound
+// tasks (no equipment yet, see TransportEdge); `unallocated` holds
+// task ids the allocator could not place (no FULL chain found).
 struct AllocationResult {
     std::vector<BoundInstance> instances;
+    std::vector<TransportEdge> transports;
     std::vector<std::string> unallocated;
 };
 

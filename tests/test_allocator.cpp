@@ -228,6 +228,48 @@ TEST(Allocator, PartialWinnerBindsAndForcesNewInstanceForResidual) {
     EXPECT_EQ(result.instances[1].served[0].task_id, "primary_residual");
 }
 
+TEST(Allocator, TransportTaskBecomesTransportEdge) {
+    // A Transport task with a TransferStrategy (magical) winner -
+    // equipment is nullopt, but it's NOT routed to unallocated; the
+    // allocator records it as a TransportEdge instead.
+    tc::Task xport{
+        .id = "t_xport",
+        .params = tc::TransportParams{
+            .source_task_id = "ta",
+            .source_port_name = "pallet_out",
+            .sink_task_id = "tb",
+            .sink_port_name = "pallet_in",
+        },
+        .target_ct_per_item = tc::CycleTimePerItem{1.0 * si::second},
+    };
+    ts::StrategyResult magical{
+        .feasibility = ts::Feasibility::FULL,
+        .strategy_name = "TransferStrategy",
+        .equipment = std::nullopt,
+        .energy_per_cycle = 0.0 * si::joule,
+        .cycle_time = 0.0 * si::second,
+        .achievable_ct_per_item = 0.0 * si::second,
+        .partial_info = std::nullopt,
+        .preconditions = {},
+        .requires_state = [](const tc::ItemState&) { return true; },
+        .effect = [](const tc::ItemState& s) { return s; },
+    };
+    std::vector<ts::TaskEnumeration> input;
+    input.push_back(make_enumeration(xport, magical, true));
+
+    auto result = ts::allocate(input);
+    EXPECT_TRUE(result.instances.empty());
+    EXPECT_TRUE(result.unallocated.empty());
+    ASSERT_EQ(result.transports.size(), 1U);
+    const auto& edge = result.transports[0];
+    EXPECT_EQ(edge.task_id, "t_xport");
+    EXPECT_EQ(edge.source_task_id, "ta");
+    EXPECT_EQ(edge.source_port_name, "pallet_out");
+    EXPECT_EQ(edge.sink_task_id, "tb");
+    EXPECT_EQ(edge.sink_port_name, "pallet_in");
+    EXPECT_EQ(edge.strategy_name, "TransferStrategy");
+}
+
 TEST(Allocator, SameCatalogIdDoesNotShareWhenCapacityExceeded) {
     // Achievable 2 s/item → 0.5 items/sec capacity.
     // Two tasks each at target 3 s/item → 0.333 items/sec demand each,

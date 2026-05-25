@@ -51,6 +51,26 @@ AllocationResult allocate(std::span<const TaskEnumeration> per_task) {
             result.unallocated.push_back(te.task.id);
             continue;
         }
+
+        // Transport tasks (T.2/T.4): the winner is TransferStrategy
+        // (magical) or a future BeltStrategy; either way the task is
+        // an EDGE, not a bound instance. Record the endpoints and move
+        // on — no sharing logic at MVP because magical transfers don't
+        // share equipment with each other (a BeltStrategy variant
+        // would, but that lives in Layer-2 belt sharing later).
+        if (te.task.kind() == tc::TaskKind::Transport) {
+            const auto& p = std::get<tc::TransportParams>(te.task.params);
+            result.transports.push_back(TransportEdge{
+                .task_id = te.task.id,
+                .source_task_id = p.source_task_id,
+                .source_port_name = p.source_port_name,
+                .sink_task_id = p.sink_task_id,
+                .sink_port_name = p.sink_port_name,
+                .strategy_name = winner.strategy_name,
+            });
+            continue;
+        }
+
         // FULL and PARTIAL are both bindable. The PARTIAL primary's
         // residual is already in the enumerator output as a separate
         // TaskEnumeration with is_residual=true; iterating in DFS
@@ -60,10 +80,10 @@ AllocationResult allocate(std::span<const TaskEnumeration> per_task) {
         // negative). The residual binds as a new instance — the
         // physical interpretation: two arms in parallel.
         if (!winner.equipment) {
-            // A FULL result with no equipment is a strategy bug, not
-            // the allocator's concern — route to `unallocated` rather
-            // than fabricate a binding (engineering.md §3, "never
-            // clamp / never invent").
+            // A FULL result with no equipment AND not a Transport task
+            // is a strategy bug, not the allocator's concern — route
+            // to `unallocated` rather than fabricate a binding
+            // (engineering.md §3, "never clamp / never invent").
             result.unallocated.push_back(te.task.id);
             continue;
         }

@@ -47,6 +47,8 @@ FetchContent_MakeAvailable(nlohmann_json)
 
 add_subdirectory(core)
 add_subdirectory(io)
+add_subdirectory(adapters/boost_conv)
+add_subdirectory(svg)
 add_subdirectory(solver)
 
 if(TINYCELL_BUILD_TESTS)

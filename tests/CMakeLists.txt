@@ -100,3 +100,21 @@ target_link_libraries(test_anchor_strategy PRIVATE
     GTest::gtest_main
 )
 add_test(NAME test_anchor_strategy COMMAND test_anchor_strategy)
+
+add_executable(test_boost_conv test_boost_conv.cpp)
+target_link_libraries(test_boost_conv PRIVATE
+    TinyCell::core
+    TinyCell::boost_conv
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_boost_conv COMMAND test_boost_conv)
+
+add_executable(test_svg test_svg.cpp)
+target_link_libraries(test_svg PRIVATE
+    TinyCell::core
+    TinyCell::svg
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_svg COMMAND test_svg)

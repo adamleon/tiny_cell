@@ -118,3 +118,11 @@ target_link_libraries(test_svg PRIVATE
     GTest::gtest_main
 )
 add_test(NAME test_svg COMMAND test_svg)
+
+add_executable(test_frames test_frames.cpp)
+target_link_libraries(test_frames PRIVATE
+    TinyCell::core
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_frames COMMAND test_frames)

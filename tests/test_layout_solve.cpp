@@ -59,7 +59,7 @@ TEST(LayoutSolve, EmptyProblemReturnsEmptySolution) {
     };
     auto out = ts::solve(p);
     EXPECT_TRUE(out.station_poses.empty());
-    EXPECT_NEAR(out.final_objective, 0.0, 1e-12);
+    EXPECT_NEAR(out.cost.total, 0.0, 1e-12);
     EXPECT_TRUE(out.hard_constraints_satisfied);
 }
 
@@ -74,7 +74,7 @@ TEST(LayoutSolve, FeasibleSeedReturnsNearlyUnchanged) {
     };
     auto out = ts::solve(p);
     ASSERT_EQ(out.station_poses.size(), 1u);
-    EXPECT_NEAR(out.final_objective, 0.0, 1e-6);
+    EXPECT_NEAR(out.cost.total, 0.0, 1e-6);
     EXPECT_TRUE(out.hard_constraints_satisfied);
     EXPECT_LT(dist(out.station_poses[0], p.stations[0].initial_pose), 0.01);
 }
@@ -129,7 +129,7 @@ TEST(LayoutSolve, MovesStationInsideFloor) {
     EXPECT_GE(final_x, 1.0 - 0.05)  // x - r >= x_min → x >= r = 1.0
         << "station still outside floor: x = " << final_x
         << ", floor_penalty = " << fp
-        << ", final_obj = " << out.final_objective;
+        << ", final_obj = " << out.cost.total;
     EXPECT_TRUE(out.hard_constraints_satisfied)
         << "x = " << final_x << ", floor_penalty = " << fp;
 }
@@ -267,7 +267,7 @@ TEST(LayoutSolve, WarmStartFromPreviousSolutionIsStable) {
     // And the warm-started objective is no worse than the cold one
     // (might be identical, might be marginally better due to
     // re-running from a near-optimal point).
-    EXPECT_LE(out2.final_objective, out1.final_objective + 1e-6);
+    EXPECT_LE(out2.cost.total, out1.cost.total + 1e-6);
 }
 
 // ---- Step 6 Phase 1: transport-distance term ----------------------------
@@ -341,7 +341,7 @@ TEST(LayoutSolve, ObjectiveDecreasesFromInfeasibleSeed) {
     ASSERT_GT(initial_obj, 0.0);
 
     auto out = ts::solve(p);
-    EXPECT_LT(out.final_objective, initial_obj * 0.5)
+    EXPECT_LT(out.cost.total, initial_obj * 0.5)
         << "solve() should make significant progress on the infeasible seed";
     EXPECT_TRUE(out.hard_constraints_satisfied);
 }

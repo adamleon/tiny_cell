@@ -74,22 +74,22 @@ double transport_penalty(const tc::Pose2D& pose_src,
     return dx * dx + dy * dy;
 }
 
-double evaluate_objective(const LayoutProblem& problem,
-                          const std::vector<tc::Pose2D>& poses) {
+ObjectiveBreakdown decompose_objective(const LayoutProblem& problem,
+                                       const std::vector<tc::Pose2D>& poses) {
     if (poses.size() != problem.stations.size()) {
         throw std::invalid_argument(
-            "evaluate_objective: pose count does not match problem.stations.size()");
+            "decompose_objective: pose count does not match problem.stations.size()");
     }
     const auto& w = problem.weights;
-    double total = 0.0;
+    ObjectiveBreakdown b;
 
     for (std::size_t i = 0; i < problem.stations.size(); ++i) {
         const auto& s = problem.stations[i];
-        total += w.floor * floor_penalty(poses[i], s.bounding_radius, problem.floor);
-        total += w.positional_prior * prior_penalty(poses[i], s.nominal);
+        b.floor += w.floor * floor_penalty(poses[i], s.bounding_radius, problem.floor);
+        b.prior += w.positional_prior * prior_penalty(poses[i], s.nominal);
         for (std::size_t j = i + 1; j < problem.stations.size(); ++j) {
             const auto& s2 = problem.stations[j];
-            total += w.overlap * overlap_penalty(
+            b.overlap += w.overlap * overlap_penalty(
                 poses[i], s.bounding_radius,
                 poses[j], s2.bounding_radius);
         }
@@ -98,13 +98,19 @@ double evaluate_objective(const LayoutProblem& problem,
         if (tr.source_station >= problem.stations.size() ||
             tr.sink_station >= problem.stations.size()) {
             throw std::invalid_argument(
-                "evaluate_objective: transport references a station index out of range");
+                "decompose_objective: transport references a station index out of range");
         }
-        total += w.transport * transport_penalty(
+        b.transport += w.transport * transport_penalty(
             poses[tr.source_station], tr.source_port_local,
             poses[tr.sink_station],   tr.sink_port_local);
     }
-    return total;
+    b.total = b.overlap + b.floor + b.prior + b.transport;
+    return b;
+}
+
+double evaluate_objective(const LayoutProblem& problem,
+                          const std::vector<tc::Pose2D>& poses) {
+    return decompose_objective(problem, poses).total;
 }
 
 bool hard_constraints_satisfied(const LayoutProblem& problem,

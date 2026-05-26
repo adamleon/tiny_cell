@@ -56,6 +56,13 @@ double transport_penalty(const core::Pose2D& pose_src,
 double evaluate_objective(const LayoutProblem& problem,
                           const std::vector<core::Pose2D>& poses);
 
+// Same as evaluate_objective but returns the per-term breakdown. The
+// `total` field equals what evaluate_objective returns. Used by
+// solve() to populate LayoutSolution.cost, and by the LNS outer loop
+// to surface which term drove each accepted/rejected move.
+ObjectiveBreakdown decompose_objective(const LayoutProblem& problem,
+                                       const std::vector<core::Pose2D>& poses);
+
 // After-the-fact hard-constraint check: returns true iff
 // overlap_penalty + floor_penalty over the whole problem is exactly
 // zero at the given poses. Used by solve() to set

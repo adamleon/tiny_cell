@@ -267,6 +267,51 @@ TEST(EvaluateObjective, TransportTermDecreasesAsStationsApproach) {
     EXPECT_NEAR(obj_at_6,   36.0, 1e-9);
 }
 
+TEST(DecomposeObjective, FieldsSumToTotalAndMatchEvaluate) {
+    // Construct a problem where each term contributes something distinct
+    // and check that decompose returns per-term values that sum to total
+    // and match what evaluate_objective alone reports.
+    ts::LayoutProblem p{
+        .stations = {
+            ts::StationProblem{
+                .id = "a", .buffered_hull = {},
+                .bounding_radius = 1.0 * metre,
+                .nominal = tc::Vec2{2.0 * metre, 5.0 * metre},  // 1 m off pose
+                .initial_pose = pose_at(1.0, 5.0),
+            },
+            ts::StationProblem{
+                .id = "b", .buffered_hull = {},
+                .bounding_radius = 1.0 * metre,
+                .nominal = tc::Vec2{3.0 * metre, 5.0 * metre},  // 1 m off pose
+                .initial_pose = pose_at(2.0, 5.0),  // 1 m from a, depth 1 → overlap 1
+            },
+        },
+        .transports = {
+            ts::TransportConstraint{
+                .source_station = 0,
+                .source_port_local = tc::Vec2{0.0 * metre, 0.0 * metre},
+                .sink_station = 1,
+                .sink_port_local = tc::Vec2{0.0 * metre, 0.0 * metre},
+            },  // ports at station centres → distance 1, penalty 1
+        },
+        .floor = ts::Floor{0.0 * metre, 10.0 * metre, 0.0 * metre, 10.0 * metre},
+        .weights = ts::ObjectiveWeights{
+            .overlap = 10.0, .floor = 100.0,
+            .positional_prior = 2.0, .transport = 5.0,
+        },
+    };
+    const std::vector<tc::Pose2D> poses{
+        p.stations[0].initial_pose, p.stations[1].initial_pose,
+    };
+    const auto b = ts::decompose_objective(p, poses);
+    EXPECT_NEAR(b.overlap, 10.0 * 1.0, 1e-9);              // depth 1² × weight 10
+    EXPECT_NEAR(b.floor, 0.0, 1e-9);                       // both inside floor
+    EXPECT_NEAR(b.prior, 2.0 * (1.0 + 1.0), 1e-9);         // 1 m off each, sum × weight 2
+    EXPECT_NEAR(b.transport, 5.0 * 1.0, 1e-9);             // dist² 1 × weight 5
+    EXPECT_NEAR(b.total, b.overlap + b.floor + b.prior + b.transport, 1e-9);
+    EXPECT_NEAR(b.total, ts::evaluate_objective(p, poses), 1e-9);
+}
+
 TEST(EvaluateObjective, RejectsTransportWithOutOfRangeStation) {
     ts::LayoutProblem p{
         .stations = {
@@ -391,7 +436,7 @@ TEST(SolveStub, ReturnsInitialPosesAndEvaluatesObjective) {
     ASSERT_EQ(out.station_poses.size(), 2u);
     EXPECT_NEAR(out.station_poses[0].x.numerical_value_in(metre), 2.0, 1e-12);
     EXPECT_NEAR(out.station_poses[1].x.numerical_value_in(metre), 5.0, 1e-12);
-    EXPECT_NEAR(out.final_objective, 0.0, 1e-12);
+    EXPECT_NEAR(out.cost.total, 0.0, 1e-12);
     EXPECT_TRUE(out.hard_constraints_satisfied);
 }
 
@@ -407,6 +452,6 @@ TEST(SolveStub, FlagsInfeasibleInitialState) {
         .weights = ts::ObjectiveWeights{},
     };
     auto out = ts::solve(p);
-    EXPECT_GT(out.final_objective, 0.0);
+    EXPECT_GT(out.cost.total, 0.0);
     EXPECT_FALSE(out.hard_constraints_satisfied);
 }

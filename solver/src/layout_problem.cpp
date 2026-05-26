@@ -102,7 +102,7 @@ LayoutSolution solve(const LayoutProblem& problem) {
     if (n == 0) {
         return LayoutSolution{
             .station_poses = {},
-            .final_objective = 0.0,
+            .cost = ObjectiveBreakdown{},
             .hard_constraints_satisfied = true,
         };
     }
@@ -131,7 +131,7 @@ LayoutSolution solve(const LayoutProblem& problem) {
         for (const auto& s : problem.stations) {
             out.station_poses.push_back(s.initial_pose);
         }
-        out.final_objective = evaluate_objective(problem, out.station_poses);
+        out.cost = decompose_objective(problem, out.station_poses);
         out.hard_constraints_satisfied =
             ::tinycell::solver::hard_constraints_satisfied(problem, out.station_poses);
         return out;
@@ -197,7 +197,11 @@ LayoutSolution solve(const LayoutProblem& problem) {
 
     LayoutSolution out;
     out.station_poses = poses_from_vars(problem, variable_indices, x);
-    out.final_objective = final_obj;
+    out.cost = decompose_objective(problem, out.station_poses);
+    // Sanity: `cost.total` and the value NLopt returned should agree
+    // since the callback IS evaluate_objective; this only catches a
+    // future divergence (e.g. someone caching the wrong value).
+    (void)final_obj;
     out.hard_constraints_satisfied =
         ::tinycell::solver::hard_constraints_satisfied(problem, out.station_poses);
     return out;

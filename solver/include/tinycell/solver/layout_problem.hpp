@@ -112,14 +112,32 @@ struct LayoutProblem {
     ObjectiveWeights weights;
 };
 
+// Per-term breakdown of the weighted objective at a pose set (step-6
+// Phase 2). Each field is already weighted; their sum equals `total`.
+// Lives here (not in layout_objective.hpp) because LayoutSolution
+// embeds it and layout_objective.hpp already includes layout_problem.hpp.
+// Surfaces the diagnostic LNS uses to attribute cost changes to a
+// specific term ("the move improved transport but cost overlap"); the
+// demo's cost-trace line and Phase-4 SA temperature calibration also
+// read it.
+struct ObjectiveBreakdown {
+    double overlap = 0.0;
+    double floor = 0.0;
+    double prior = 0.0;
+    double transport = 0.0;
+    double total = 0.0;
+};
+
 struct LayoutSolution {
     // World-frame pose per station, in the same order as
     // LayoutProblem.stations.
     std::vector<core::Pose2D> station_poses;
 
-    // Sum of weighted penalties at the returned poses. Lower is
-    // better; zero means every soft term hit its minimum.
-    double final_objective;
+    // Weighted per-term breakdown at the returned poses. `total` is
+    // the scalar to compare across solutions; the per-term fields tell
+    // you which constraint or soft term drove the move. Lower is
+    // better on every field; zero means that term hit its minimum.
+    ObjectiveBreakdown cost;
 
     // True iff every HARD constraint (non-overlap, in-floor) is
     // satisfied — i.e. the corresponding penalty terms evaluate to

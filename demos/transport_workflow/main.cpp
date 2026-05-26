@@ -1,33 +1,28 @@
-// INTENT: Phase T.7 of step 5 — exercise the transport-and-ports
+// INTENT: Phase T cleanup demo — exercise the transport-and-ports
 // pipeline end-to-end on a workflow that wires together Anchor +
-// Palletize + (strategy-spawned) Transport tasks.
+// Palletize + WORKFLOW-DECLARED Transport tasks.
 //
 // What it demonstrates:
 //   * An Anchor task pinned to a world pose acts as a feeder for
 //     the cell's items.
-//   * Three Palletize tasks (one tight target that gets a pusher,
-//     two looser ones that get arms or pushers depending on the
-//     allocator).
-//   * The pusher-bound palletize task SPAWNS a Transport precondition
-//     (T.6); the enumerator picks it up and matches TransferStrategy
-//     to it (T.4). The Transport sink is the pusher's item_in port;
-//     the source is initially empty (the workflow author wires it to
-//     the feeder Anchor — done here by post-processing the spawned
-//     Transport task's source_task_id).
+//   * Three Palletize tasks (one tight target that gets parallel
+//     arms; two looser ones that share a pusher).
+//   * Explicit Transport tasks in the workflow connect the feeder
+//     to each palletize task's item_in port. The pusher's strict
+//     PortConstraint (direction = stroke axis) restricts what a
+//     placer can do with those Transports, but the topology itself
+//     lives in the workflow, not in strategy preconditions
+//     (cleanup-reverting-T.6 commit).
 //   * The allocator emits BoundInstances (palletize stations),
-//     TransportEdges (the spawned transports, now wired to the
-//     feeder), and PinnedAnchors (the feeder itself).
+//     TransportEdges (the workflow-declared Transports), and
+//     PinnedAnchors (the feeder).
 //
 // Success: prints
 //   * Per-task winners with strategy names + feasibilities
-//   * Bound instances with served tasks (existing layer-2 output)
+//   * Bound instances with served tasks
 //   * Pinned anchors with world poses
-//   * Transport edges with source/sink (task, port) — pusher-bound
-//     palletize tasks have wired edges to the feeder; arm-bound
-//     palletize tasks have no transport edges (arms don't yet spawn
-//     them).
-// Exit 0 means the pipeline ran cleanly with no unallocated tasks
-// and every spawned Transport got a winner.
+//   * Transport edges with source/sink (task, port)
+// Exit 0 means the pipeline ran cleanly with no unallocated tasks.
 
 #include <algorithm>
 #include <filesystem>
@@ -104,20 +99,20 @@ tc::Task make_feeder(const std::string& id, const std::string& name,
     };
 }
 
-// Wire the dangling source of any "*_item_transport" Transport task
-// to the named feeder Anchor. The PusherStrategy spawns the Transport
-// with an empty source (T.6) because the strategy doesn't know which
-// feeder it draws from; the workflow author's job (this function) is
-// to point those dangling sources at the right Anchor.
-void wire_dangling_transports_to_feeder(std::vector<ts::TaskEnumeration>& enums,
-                                        const std::string& feeder_task_id) {
-    for (auto& te : enums) {
-        if (te.task.kind() != tc::TaskKind::Transport) continue;
-        auto& tp = std::get<tc::TransportParams>(te.task.params);
-        if (!tp.source_task_id.empty()) continue;  // already wired
-        tp.source_task_id = feeder_task_id;
-        tp.source_port_name = "port";  // single Anchor port name
-    }
+tc::Task make_transport(const std::string& id,
+                        const std::string& src_task, const std::string& src_port,
+                        const std::string& dst_task, const std::string& dst_port,
+                        double target_s_per_item) {
+    return tc::Task{
+        .id = id,
+        .params = tc::TransportParams{
+            .source_task_id = src_task,
+            .source_port_name = src_port,
+            .sink_task_id = dst_task,
+            .sink_port_name = dst_port,
+        },
+        .target_ct_per_item = tc::CycleTimePerItem{target_s_per_item * second},
+    };
 }
 
 const char* feasibility_str(ts::Feasibility f) {
@@ -153,10 +148,15 @@ int main() {
         make_palletize("t_pallet_a",     5.0, 1.2, 0.8, 24, 5.0),
         make_palletize("t_pallet_b",     5.0, 1.2, 0.8, 24, 5.0),
         make_palletize("t_pallet_tight", 8.0, 2.0, 2.0, 12, 2.0),
+        // Workflow-declared Transports: feeder.port -> each palletize.item_in.
+        // The transports' target_ct_per_item matches the sink palletize's
+        // rate so the transfer is sized for the actual throughput.
+        make_transport("t_xport_a",     "t_feeder", "port", "t_pallet_a",     "item_in", 5.0),
+        make_transport("t_xport_b",     "t_feeder", "port", "t_pallet_b",     "item_in", 5.0),
+        make_transport("t_xport_tight", "t_feeder", "port", "t_pallet_tight", "item_in", 2.0),
     };
 
     auto enumeration = ts::enumerate(workflow, strategies);
-    wire_dangling_transports_to_feeder(enumeration, "t_feeder");
 
     std::cout << "Workflow tasks: " << workflow.size()
               << "  (enumerated incl. spawned residuals/transports: "

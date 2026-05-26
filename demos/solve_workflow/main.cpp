@@ -1,38 +1,34 @@
-// INTENT: end-to-end Layer-3 placement (Phase G of step 5). Runs the
-// full pipeline on the same workflow the transport_workflow demo
-// uses — feeder Anchor + three Palletize tasks + three Transport
-// edges — then:
+// INTENT: end-to-end Layer-3 placement + LNS (step 5 Phase G + step 6
+// Phase 5). Runs the full pipeline:
 //
 //   1. enumerate(workflow, strategies)          (steps 1-3, T.7)
 //   2. allocate(enumeration)                    (step 4 + T.5)
 //   3. positional_prior over palletize tasks    (Phase C)
-//   4. build a LayoutProblem from the allocation
-//      - one StationProblem per BoundInstance, seeded at the centroid
-//        of its served palletize tasks' nominal positions
-//      - one StationProblem per PinnedAnchor, frozen at its world pose
-//   5. solve(layout_problem)                    (Phase D + E + F)
-//   6. write a world-coords SVG of the solved layout
+//   4. build a LayoutProblem from the allocation, with Transports
+//      threaded in (step 6 Phase 1)
+//   5. solve(layout_problem)                    -> cold solve (Phase E)
+//   6. lns_solve(layout_problem)                -> SA-annealed best
+//      (step 6 Phases 3-4)
+//   7. emit before.svg, after.svg, cost_trace.csv
 //
-// Success: writes <build>/demos/solve_workflow/output/layout.svg
-// containing the floor outline, every station's footprint at its
-// SOLVED pose (with arm reach envelopes overlaid), the feeder anchor
-// marker, and a line per Transport edge connecting the source/sink
-// stations. Exits 0 if no station is unallocated and
-// hard_constraints_satisfied is true; non-zero with a diagnostic
-// message otherwise.
+// Success: cost_trace.csv lists every LNS iteration; after.svg shows
+// a layout with total cost <= before.svg's. Exits 0 iff all stations
+// allocated and hard_constraints_satisfied on the LNS best.
 //
-// What the SVG shows that the hand-rolled layer_3_placement demo
-// could not:
-//   - Stations placed by an actual solver, not at idx*pitch along x.
-//   - Anchors held in place (frozen=true) and contributing to the
-//     overlap field that pushes nearby stations away.
-//   - Transport edges visualized in world coords - the topology made
-//     spatial.
+// What this shows beyond the cold solve alone:
+//   - The transport-distance term moves stations measurably toward
+//     what they exchange items with (vs. just sitting at the prior
+//     nominal).
+//   - The LNS outer loop is the seam where richer destroy operators,
+//     non-smooth objectives, and the StationFootprint cache will
+//     plug in next; for the current single-station + smooth NLP setup
+//     the loop confirms the cold solve is at a local optimum.
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <map>
 #include <mp-units/systems/si.h>
@@ -53,6 +49,7 @@
 #include <tinycell/solver/arm_strategy.hpp>
 #include <tinycell/solver/enumerator.hpp>
 #include <tinycell/solver/layout_problem.hpp>
+#include <tinycell/solver/lns.hpp>
 #include <tinycell/solver/positional_prior.hpp>
 #include <tinycell/solver/pusher_strategy.hpp>
 #include <tinycell/solver/transfer_strategy.hpp>
@@ -543,9 +540,7 @@ int main() {
         allocation, enumeration, arms, pushers, nominal_for_task,
         floor, weights, kClearance_m);
 
-    auto solution = ts::solve(layout.problem);
-
-    // CLI summary.
+    // CLI header.
     std::cout << "Workflow: " << workflow.size() << " task(s) -> "
               << enumeration.size() << " enumerated\n";
     std::cout << "Allocation: " << allocation.instances.size()
@@ -553,31 +548,83 @@ int main() {
               << " anchor(s), " << allocation.transports.size()
               << " transport edge(s)\n\n";
 
-    const auto& c = solution.cost;
-    std::cout << "Solver result (hard_constraints_satisfied = "
-              << (solution.hard_constraints_satisfied ? "yes" : "no") << ")\n"
-              << "  total=" << c.total
-              << "  overlap=" << c.overlap
-              << "  floor=" << c.floor
-              << "  prior=" << c.prior
-              << "  transport=" << c.transport << "\n";
+    // Cold solve -> "before". This is what every previous run of this
+    // demo produced; serves as the LNS baseline.
+    const auto cold = ts::solve(layout.problem);
+    const auto print_cost = [](const char* label, const ts::ObjectiveBreakdown& b,
+                               bool feasible) {
+        std::cout << label
+                  << "  total=" << b.total
+                  << "  overlap=" << b.overlap
+                  << "  floor=" << b.floor
+                  << "  prior=" << b.prior
+                  << "  transport=" << b.transport
+                  << "  feasible=" << (feasible ? "yes" : "no") << "\n";
+    };
+    print_cost("[cold] ", cold.cost, cold.hard_constraints_satisfied);
+
+    // LNS: SA-annealed destroy-and-repair. Auto temperature picks
+    // T0 = cold_cost / 10; alpha = 0.9 cools to ~12% of T0 over 20
+    // iters. Single-station deterministic re-solves on this smooth
+    // 2D problem won't usually fire Metropolis (see lns.hpp), so
+    // expect the LNS best to equal the cold solve here — the value
+    // lands when destroy operators broaden or the objective gets
+    // non-smooth.
+    const ts::LnsParams params{
+        .max_iterations = 20,
+        .seed = 1,
+        .temperature_initial = 0.0,
+        .auto_temperature = true,
+        .temperature_decay = 0.9,
+    };
+    const auto lns = ts::lns_solve(layout.problem, params);
+    print_cost("[lns]  ", lns.best.cost, lns.best.hard_constraints_satisfied);
+    std::cout << "  iterations=" << lns.trace.size()
+              << "  accepted="
+              << std::count_if(lns.trace.begin(), lns.trace.end(),
+                               [](const ts::LnsIteration& it) { return it.accepted; })
+              << "\n\n";
+
     for (std::size_t i = 0; i < layout.problem.stations.size(); ++i) {
         const auto& s = layout.problem.stations[i];
-        const auto& p = solution.station_poses[i];
+        const auto& p_cold = cold.station_poses[i];
+        const auto& p_lns  = lns.best.station_poses[i];
         std::cout << "  " << s.id
-                  << "  pose=(" << p.x.numerical_value_in(metre)
-                  << ", " << p.y.numerical_value_in(metre) << ")"
-                  << "  nominal=(" << s.nominal.x.numerical_value_in(metre)
-                  << ", " << s.nominal.y.numerical_value_in(metre) << ")"
+                  << "  cold=(" << p_cold.x.numerical_value_in(metre)
+                  << ", " << p_cold.y.numerical_value_in(metre) << ")"
+                  << "  lns=(" << p_lns.x.numerical_value_in(metre)
+                  << ", " << p_lns.y.numerical_value_in(metre) << ")"
                   << (s.frozen ? "  [frozen]" : "") << "\n";
     }
 
-    const auto svg_path = out_dir / "layout.svg";
-    draw_layout_svg(solution, layout.problem, layout.sources,
-                    allocation, arms, svg_path);
-    std::cout << "\nWrote " << svg_path.string() << "\n";
+    // Artefacts: before.svg (cold), after.svg (LNS best), cost_trace.csv.
+    // before/after pairs are diff-friendly — when LNS actually moves
+    // a station, the diff is visible byte-for-byte at the changed
+    // <polygon points="..."/>.
+    const auto before_path = out_dir / "before.svg";
+    const auto after_path  = out_dir / "after.svg";
+    draw_layout_svg(cold, layout.problem, layout.sources,
+                    allocation, arms, before_path);
+    draw_layout_svg(lns.best, layout.problem, layout.sources,
+                    allocation, arms, after_path);
 
-    // Exit status: any unalloc was already an early-exit, here we
-    // signal solver-side infeasibility too.
-    return solution.hard_constraints_satisfied ? 0 : 3;
+    const auto csv_path = out_dir / "cost_trace.csv";
+    std::ofstream csv(csv_path);
+    csv << "iter,destroyed_station,temperature,current_total,proposed_total,"
+        << "best_total,accepted\n";
+    for (const auto& it : lns.trace) {
+        csv << it.iter << ','
+            << it.destroyed_station << ','
+            << it.temperature << ','
+            << it.current_total << ','
+            << it.proposed_total << ','
+            << it.best_total << ','
+            << (it.accepted ? 1 : 0) << '\n';
+    }
+
+    std::cout << "\nWrote " << before_path.string() << "\n"
+              << "Wrote " << after_path.string() << "\n"
+              << "Wrote " << csv_path.string() << "\n";
+
+    return lns.best.hard_constraints_satisfied ? 0 : 3;
 }

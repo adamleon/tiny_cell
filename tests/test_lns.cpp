@@ -43,6 +43,18 @@ ts::StationProblem make_station(const std::string& id,
 
 // ---- contract: greedy never gets worse ----------------------------------
 
+// Pure-greedy LnsParams: auto_temperature off, T0=0 → metropolis
+// always rejects → only strict improvements pass.
+constexpr ts::LnsParams greedy(std::size_t iters) {
+    return ts::LnsParams{
+        .max_iterations = iters,
+        .seed = 0,
+        .temperature_initial = 0.0,
+        .auto_temperature = false,
+        .temperature_decay = 0.95,
+    };
+}
+
 TEST(Lns, GreedyNeverIncreasesTotalCost) {
     // Three stations seeded at their nominal, no transports — solve()
     // converges immediately. LNS iterations have nothing to improve;
@@ -59,7 +71,7 @@ TEST(Lns, GreedyNeverIncreasesTotalCost) {
         .weights = ts::ObjectiveWeights{},
     };
     const auto cold = ts::solve(p);
-    auto out = ts::lns_solve(p, ts::LnsParams{.max_iterations = 12});
+    auto out = ts::lns_solve(p, greedy(12));
     EXPECT_EQ(out.trace.size(), 12u);
     EXPECT_LE(out.best.cost.total, cold.cost.total + 1e-9);
     for (const auto& it : out.trace) {
@@ -97,7 +109,7 @@ TEST(Lns, GreedyAcceptanceImprovesTransportTotal) {
             .positional_prior = 1.0, .transport = 1.0,
         },
     };
-    auto out = ts::lns_solve(p, ts::LnsParams{.max_iterations = 6});
+    auto out = ts::lns_solve(p, greedy(6));
     const auto cold = ts::solve(p);
     EXPECT_LE(out.best.cost.total, cold.cost.total + 1e-9);
     EXPECT_EQ(out.trace.size(), 6u);
@@ -120,7 +132,7 @@ TEST(Lns, FrozenStationsAreNeverDestroyed) {
         .floor = ts::Floor{-5.0 * metre, 20.0 * metre, -5.0 * metre, 5.0 * metre},
         .weights = ts::ObjectiveWeights{},
     };
-    auto out = ts::lns_solve(p, ts::LnsParams{.max_iterations = 10});
+    auto out = ts::lns_solve(p, greedy(10));
     for (const auto& it : out.trace) {
         EXPECT_NE(it.destroyed_station, 0u)
             << "iter " << it.iter << " destroyed the frozen anchor";
@@ -138,7 +150,7 @@ TEST(Lns, AllFrozenIsANoOp) {
         .floor = ts::Floor{0.0 * metre, 10.0 * metre, -5.0 * metre, 5.0 * metre},
         .weights = ts::ObjectiveWeights{},
     };
-    auto out = ts::lns_solve(p, ts::LnsParams{.max_iterations = 5});
+    auto out = ts::lns_solve(p, greedy(5));
     EXPECT_TRUE(out.trace.empty());
 }
 
@@ -154,7 +166,111 @@ TEST(Lns, ZeroIterationsReturnsColdSolve) {
         .weights = ts::ObjectiveWeights{},
     };
     const auto cold = ts::solve(p);
-    auto out = ts::lns_solve(p, ts::LnsParams{.max_iterations = 0});
+    auto out = ts::lns_solve(p, greedy(0));
     EXPECT_TRUE(out.trace.empty());
     EXPECT_NEAR(out.best.cost.total, cold.cost.total, 1e-9);
+}
+
+// ---- Phase 4: simulated-annealing acceptance -----------------------------
+
+TEST(Lns, SaTraceCarriesGeometricTemperatureSchedule) {
+    // Temperature at iter k should equal T0 * decay^k. With explicit
+    // T0 = 100 and decay = 0.8, iter 0 → 100, iter 1 → 80, iter 5 → 32.77.
+    ts::LayoutProblem p{
+        .stations = {
+            make_station("a", 0.0, 0.0, 0.5, 0.0, 0.0),
+            make_station("b", 5.0, 0.0, 0.5, 5.0, 0.0),
+        },
+        .floor = ts::Floor{-5.0 * metre, 10.0 * metre, -5.0 * metre, 5.0 * metre},
+        .weights = ts::ObjectiveWeights{},
+    };
+    auto out = ts::lns_solve(p, ts::LnsParams{
+        .max_iterations = 6,
+        .seed = 0,
+        .temperature_initial = 100.0,
+        .auto_temperature = false,
+        .temperature_decay = 0.8,
+    });
+    ASSERT_EQ(out.trace.size(), 6u);
+    EXPECT_NEAR(out.trace[0].temperature, 100.0, 1e-9);
+    EXPECT_NEAR(out.trace[1].temperature, 80.0, 1e-9);
+    EXPECT_NEAR(out.trace[5].temperature, 100.0 * std::pow(0.8, 5), 1e-9);
+}
+
+// NB: a test asserting "Metropolis fires at least once" was removed.
+// With single-station destroy and the smooth 2D NLP inner solver,
+// freed stations re-converge deterministically against the frozen
+// rest — proposed_total never strictly exceeds current_total, so
+// Metropolis never has a worsening move to act on. SA becomes
+// observable when destroy operators broaden (>1 station) or the
+// objective gets non-smooth (e.g., port-direction tolerances). The
+// scaffold is in place for those without re-touching this file.
+
+TEST(Lns, SaSeedReproducibility) {
+    // Same problem, same seed -> identical trace (acceptance order,
+    // best total). Different seed -> may differ in acceptance pattern.
+    ts::LayoutProblem p{
+        .stations = {
+            make_station("a", 0.0, 0.0, 1.0, 0.0, 0.0),
+            make_station("b", 3.0, 0.0, 1.0, 3.0, 0.0),
+            make_station("c", 6.0, 0.0, 1.0, 6.0, 0.0),
+        },
+        .transports = {
+            ts::TransportConstraint{
+                .source_station = 0,
+                .source_port_local = tc::Vec2{0.0 * metre, 0.0 * metre},
+                .sink_station = 2,
+                .sink_port_local = tc::Vec2{0.0 * metre, 0.0 * metre},
+            },
+        },
+        .floor = ts::Floor{-5.0 * metre, 15.0 * metre, -5.0 * metre, 5.0 * metre},
+        .weights = ts::ObjectiveWeights{
+            .overlap = 50.0, .floor = 1.0,
+            .positional_prior = 1.0, .transport = 5.0,
+        },
+    };
+    ts::LnsParams params{
+        .max_iterations = 20, .seed = 12345,
+        .temperature_initial = 30.0, .auto_temperature = false,
+        .temperature_decay = 0.95,
+    };
+    auto a = ts::lns_solve(p, params);
+    auto b = ts::lns_solve(p, params);
+    ASSERT_EQ(a.trace.size(), b.trace.size());
+    for (std::size_t i = 0; i < a.trace.size(); ++i) {
+        EXPECT_EQ(a.trace[i].accepted, b.trace[i].accepted) << "iter " << i;
+        EXPECT_NEAR(a.trace[i].proposed_total, b.trace[i].proposed_total, 1e-9);
+    }
+    EXPECT_NEAR(a.best.cost.total, b.best.cost.total, 1e-9);
+}
+
+TEST(Lns, SaBestNeverWorseThanCold) {
+    // Best-ever should always beat or match the cold solve, regardless
+    // of whether the SA walker briefly accepted worse moves.
+    ts::LayoutProblem p{
+        .stations = {
+            make_station("a", -2.0, 0.0, 1.0, 0.0, 0.0),
+            make_station("b", 4.0, 1.0, 1.0, 5.0, 0.0),
+        },
+        .transports = {
+            ts::TransportConstraint{
+                .source_station = 0,
+                .source_port_local = tc::Vec2{0.0 * metre, 0.0 * metre},
+                .sink_station = 1,
+                .sink_port_local = tc::Vec2{0.0 * metre, 0.0 * metre},
+            },
+        },
+        .floor = ts::Floor{-5.0 * metre, 10.0 * metre, -5.0 * metre, 5.0 * metre},
+        .weights = ts::ObjectiveWeights{
+            .overlap = 50.0, .floor = 1.0,
+            .positional_prior = 1.0, .transport = 5.0,
+        },
+    };
+    const auto cold = ts::solve(p);
+    auto out = ts::lns_solve(p, ts::LnsParams{
+        .max_iterations = 20, .seed = 99,
+        .temperature_initial = 0.0, .auto_temperature = true,
+        .temperature_decay = 0.9,
+    });
+    EXPECT_LE(out.best.cost.total, cold.cost.total + 1e-9);
 }

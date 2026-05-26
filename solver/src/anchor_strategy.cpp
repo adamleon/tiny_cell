@@ -22,14 +22,14 @@ StrategyResult AnchorStrategy::evaluate(const tc::Task& task) const {
     }
     const auto& a = std::get<tc::AnchorParams>(task.params);
 
-    // The "port" PortConstraint is at (a.world_x, a.world_y, a.world_theta).
-    // Note: these are WORLD coordinates, not station-frame. Anchors
-    // are pinned, so the convention is that the anchor's "station"
-    // sits at the world pose AnchorParams names, with the port at the
-    // station's origin. The placer reads this PortConstraint and
-    // pins the anchor station's world pose to the AnchorParams pose
-    // (which it does NOT optimise over). At T.7 the demo just records
-    // the values; Phase D wires the pinning.
+    // The "port" sits at the anchor station's origin in STATION FRAME
+    // (port.hpp documents PortConstraint coordinates as station-frame).
+    // The anchor's station is pinned at (a.world_x, a.world_y,
+    // a.world_theta) by the consumer that builds the LayoutProblem, so
+    // port_world = station_pose ∘ (0, 0, 0) recovers the world pose
+    // AnchorParams names without doubling it. Direction tolerance 0:
+    // an anchor's flow direction is fixed by the world setup.
+    (void)a;
     return StrategyResult{
         .feasibility = Feasibility::FULL,
         .strategy_name = std::string{name()},
@@ -43,9 +43,9 @@ StrategyResult AnchorStrategy::evaluate(const tc::Task& task) const {
         .effect = [](const tc::ItemState& s) { return s; },
         .port_constraints = {
             {.port_name = "port",
-             .x = a.world_x,
-             .y = a.world_y,
-             .theta = a.world_theta,
+             .x = 0.0 * si::metre,
+             .y = 0.0 * si::metre,
+             .theta = 0.0 * si::radian,
              .direction_tolerance = 0.0 * si::radian},
         },
     };

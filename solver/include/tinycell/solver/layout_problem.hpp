@@ -14,7 +14,7 @@
 // returns the initial poses unchanged and evaluates the objective;
 // Phase E wires NLopt/SLSQP behind the same signature.
 //
-// MVP scope at D — three objective terms only:
+// Objective terms (after step-6 Phase 1):
 //   * overlap (smooth penalty between station bounding-circles —
 //     broad-phase non-overlap; narrow-phase polygon union arrives
 //     when the StationFootprint cache lands and a real consumer
@@ -22,11 +22,13 @@
 //   * floor bounds (smooth penalty when a bounding-circle extends
 //     past a floor edge)
 //   * positional prior (squared distance from nominal seed)
-// Deferred from D: transfer-length (needs transports in the problem
-// + port-world-pose resolution); reach feasibility (needs task
-// pickup/dropoff modelling); energy as a function of placed distance
-// (needs the motion model coupled to actual poses); blueprint
-// obstacles; narrow-phase polygon union.
+//   * transport length (squared distance between connected port
+//     world-poses; the term that makes LNS care about moving stations
+//     closer to what they exchange items with)
+// Deferred: port-direction tolerances (step-5 deferral #3); reach
+// feasibility (needs task pickup/dropoff modelling); energy as a
+// function of placed distance (needs the motion model coupled to
+// actual poses); blueprint obstacles; narrow-phase polygon union.
 
 #include <string>
 #include <tinycell/geometry.hpp>
@@ -73,6 +75,26 @@ struct Floor {
     core::Length y_max;
 };
 
+// One transport edge as seen by the placer (step-6 Phase 1). Each
+// transport connects a source port on one station to a sink port on
+// another. The port-local fields are in the corresponding station's
+// frame (port.hpp convention); the placer composes them with the
+// station's optimised pose to get the port's world position, and
+// penalises the squared distance between source-world and sink-world.
+//
+// Endpoints of transports terminating at an anchor use port_local
+// (0, 0): the anchor's station is pinned at its world pose and the
+// anchor's port sits at the station origin (anchor_strategy.cpp).
+//
+// theta + direction tolerances are deferred (step-5 deferral #3);
+// only port positions feed the Phase-1 transport-distance term.
+struct TransportConstraint {
+    std::size_t source_station;       // index into LayoutProblem::stations
+    core::Vec2 source_port_local;     // in source station's frame
+    std::size_t sink_station;
+    core::Vec2 sink_port_local;       // in sink station's frame
+};
+
 // Soft objective weights. Defaults are reasonable MVP starting points;
 // callers should expect to tune them once the placer is wired (Phase
 // E) and behaviour can be observed on real workloads.
@@ -80,10 +102,12 @@ struct ObjectiveWeights {
     double overlap = 100.0;          // penalty per metre² of bounding-circle interpenetration
     double floor = 100.0;            // penalty per metre² of out-of-floor extent
     double positional_prior = 1.0;   // penalty per metre² of deviation from nominal
+    double transport = 1.0;          // penalty per metre² of transport-edge length²
 };
 
 struct LayoutProblem {
     std::vector<StationProblem> stations;
+    std::vector<TransportConstraint> transports;
     Floor floor;
     ObjectiveWeights weights;
 };

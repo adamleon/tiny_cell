@@ -57,6 +57,23 @@ double prior_penalty(const tc::Pose2D& pose, const tc::Vec2& nominal) {
     return dx * dx + dy * dy;
 }
 
+double transport_penalty(const tc::Pose2D& pose_src,
+                         const tc::Vec2& port_src_local,
+                         const tc::Pose2D& pose_sink,
+                         const tc::Vec2& port_sink_local) {
+    // Compose each station pose with its port-local position to get the
+    // port's world coordinates. Pose2D's theta is the station's rotation;
+    // a Transform2D with the station's (x, y, theta) is what core::apply
+    // expects.
+    const tc::Transform2D t_src{pose_src.x, pose_src.y, pose_src.theta};
+    const tc::Transform2D t_sink{pose_sink.x, pose_sink.y, pose_sink.theta};
+    const tc::Vec2 port_src_world  = tc::apply(t_src,  port_src_local);
+    const tc::Vec2 port_sink_world = tc::apply(t_sink, port_sink_local);
+    const double dx = (port_src_world.x - port_sink_world.x).numerical_value_in(si::metre);
+    const double dy = (port_src_world.y - port_sink_world.y).numerical_value_in(si::metre);
+    return dx * dx + dy * dy;
+}
+
 double evaluate_objective(const LayoutProblem& problem,
                           const std::vector<tc::Pose2D>& poses) {
     if (poses.size() != problem.stations.size()) {
@@ -76,6 +93,16 @@ double evaluate_objective(const LayoutProblem& problem,
                 poses[i], s.bounding_radius,
                 poses[j], s2.bounding_radius);
         }
+    }
+    for (const auto& tr : problem.transports) {
+        if (tr.source_station >= problem.stations.size() ||
+            tr.sink_station >= problem.stations.size()) {
+            throw std::invalid_argument(
+                "evaluate_objective: transport references a station index out of range");
+        }
+        total += w.transport * transport_penalty(
+            poses[tr.source_station], tr.source_port_local,
+            poses[tr.sink_station],   tr.sink_port_local);
     }
     return total;
 }

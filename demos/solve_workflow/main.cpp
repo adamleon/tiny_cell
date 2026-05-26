@@ -30,10 +30,13 @@
 //     spatial.
 
 #include <algorithm>
+#include <cmath>
+#include <cstdio>
 #include <filesystem>
 #include <iostream>
 #include <map>
 #include <mp-units/systems/si.h>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <variant>
@@ -233,8 +236,30 @@ struct LayoutBuildResult {
     std::map<std::string, std::size_t> task_to_station;  // task_id -> station index
 };
 
+// Look up the winning StrategyResult's PortConstraint for (task_id,
+// port_name). Returns nullptr if either the task wasn't enumerated, has
+// no winner, or the winner didn't emit that port. Walked once per
+// TransportEdge endpoint at build time; not on the LNS inner-loop path.
+const tc::PortConstraint* find_port_constraint(
+    std::span<const ts::TaskEnumeration> enumeration,
+    const std::string& task_id,
+    const std::string& port_name)
+{
+    for (const auto& te : enumeration) {
+        if (te.task.id != task_id) continue;
+        if (!te.winner_index.has_value()) return nullptr;
+        const auto& winner = te.proposals[*te.winner_index];
+        for (const auto& pc : winner.port_constraints) {
+            if (pc.port_name == port_name) return &pc;
+        }
+        return nullptr;
+    }
+    return nullptr;
+}
+
 LayoutBuildResult build_layout_problem(
     const ts::AllocationResult& alloc,
+    std::span<const ts::TaskEnumeration> enumeration,
     const std::vector<tc::ArmSpec>& arms,
     const std::vector<tc::PusherSpec>& pushers,
     const std::map<std::string, tc::Vec2>& nominal_for_task,
@@ -289,6 +314,41 @@ LayoutBuildResult build_layout_problem(
         result.sources.push_back({StationSourceKind::Anchor, i});
         result.task_to_station[a.task_id] = result.problem.stations.size() - 1;
     }
+
+    // Transport constraints: one per TransportEdge in the allocation.
+    // Each endpoint's port-local position comes from the corresponding
+    // winning strategy's PortConstraint, looked up in the enumeration.
+    // Both endpoints MUST resolve — a Transport task whose source or
+    // sink wasn't enumerated, has no winner, or whose winner doesn't
+    // declare the named port, indicates a workflow / strategy mismatch
+    // that the LayoutProblem cannot meaningfully score. Skip these
+    // (rather than fabricate a (0, 0) port) and warn; workflow
+    // validation will become the proper enforcement point when it lands.
+    for (const auto& edge : alloc.transports) {
+        const auto src_st = result.task_to_station.find(edge.source_task_id);
+        const auto dst_st = result.task_to_station.find(edge.sink_task_id);
+        if (src_st == result.task_to_station.end() ||
+            dst_st == result.task_to_station.end()) {
+            std::cerr << "warning: transport '" << edge.task_id
+                      << "' references unknown task; skipped\n";
+            continue;
+        }
+        const auto* src_pc = find_port_constraint(
+            enumeration, edge.source_task_id, edge.source_port_name);
+        const auto* dst_pc = find_port_constraint(
+            enumeration, edge.sink_task_id, edge.sink_port_name);
+        if (src_pc == nullptr || dst_pc == nullptr) {
+            std::cerr << "warning: transport '" << edge.task_id
+                      << "' has no PortConstraint on source or sink; skipped\n";
+            continue;
+        }
+        result.problem.transports.push_back(ts::TransportConstraint{
+            .source_station = src_st->second,
+            .source_port_local = tc::Vec2{src_pc->x, src_pc->y},
+            .sink_station = dst_st->second,
+            .sink_port_local = tc::Vec2{dst_pc->x, dst_pc->y},
+        });
+    }
     return result;
 }
 
@@ -297,7 +357,6 @@ LayoutBuildResult build_layout_problem(
 void draw_layout_svg(const ts::LayoutSolution& solution,
                      const ts::LayoutProblem& problem,
                      const std::vector<StationSource>& sources,
-                     const std::map<std::string, std::size_t>& task_to_station,
                      const ts::AllocationResult& alloc,
                      const std::vector<tc::ArmSpec>& arms,
                      const std::filesystem::path& out_path) {
@@ -325,17 +384,28 @@ void draw_layout_svg(const ts::LayoutSolution& solution,
                   tc::Vec2{xmin * metre, ymax * metre}},
               "rgba(0,0,0,0.03)", "rgba(0,0,0,0.40)", 0.05);
 
-    // Transport lines underneath stations so they don't obscure footprints.
-    for (const auto& edge : alloc.transports) {
-        auto src_it = task_to_station.find(edge.source_task_id);
-        auto dst_it = task_to_station.find(edge.sink_task_id);
-        if (src_it == task_to_station.end() || dst_it == task_to_station.end()) continue;
-        const auto& src_pose = solution.station_poses[src_it->second];
-        const auto& dst_pose = solution.station_poses[dst_it->second];
-        w.polygon(tc::Polygon{
-                      tc::Vec2{src_pose.x, src_pose.y},
-                      tc::Vec2{dst_pose.x, dst_pose.y}},
+    // Transport lines underneath stations so they don't obscure
+    // footprints. Endpoints are PORT world poses (station pose ∘ port
+    // local), not station centres — this is the geometry the Phase-1
+    // transport-distance objective scores against.
+    for (const auto& tr : problem.transports) {
+        const auto& src_pose  = solution.station_poses[tr.source_station];
+        const auto& dst_pose  = solution.station_poses[tr.sink_station];
+        const tc::Transform2D t_src{src_pose.x, src_pose.y, src_pose.theta};
+        const tc::Transform2D t_dst{dst_pose.x, dst_pose.y, dst_pose.theta};
+        const auto src_world = tc::apply(t_src, tr.source_port_local);
+        const auto dst_world = tc::apply(t_dst, tr.sink_port_local);
+        w.polygon(tc::Polygon{src_world, dst_world},
                   "none", "rgba(0,80,200,0.55)", 0.04);
+        // Length label at the midpoint.
+        const double dx = (dst_world.x - src_world.x).numerical_value_in(metre);
+        const double dy = (dst_world.y - src_world.y).numerical_value_in(metre);
+        const double len_m = std::sqrt(dx * dx + dy * dy);
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%.2f m", len_m);
+        w.text(tc::Vec2{(src_world.x + dst_world.x) * 0.5,
+                        (src_world.y + dst_world.y) * 0.5},
+               buf, 0.18, "rgba(0,80,200,0.85)");
     }
 
     // Stations: per source kind.
@@ -470,7 +540,8 @@ int main() {
     constexpr double kClearance_m = 0.2;   // placeholder, standards.md is a stub
 
     auto layout = build_layout_problem(
-        allocation, arms, pushers, nominal_for_task, floor, weights, kClearance_m);
+        allocation, enumeration, arms, pushers, nominal_for_task,
+        floor, weights, kClearance_m);
 
     auto solution = ts::solve(layout.problem);
 
@@ -499,7 +570,7 @@ int main() {
 
     const auto svg_path = out_dir / "layout.svg";
     draw_layout_svg(solution, layout.problem, layout.sources,
-                    layout.task_to_station, allocation, arms, svg_path);
+                    allocation, arms, svg_path);
     std::cout << "\nWrote " << svg_path.string() << "\n";
 
     // Exit status: any unalloc was already an early-exit, here we

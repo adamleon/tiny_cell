@@ -553,10 +553,14 @@ int main() {
               << " anchor(s), " << allocation.transports.size()
               << " transport edge(s)\n\n";
 
-    std::cout << "Solver result (final_objective = " << solution.final_objective
-              << ", hard_constraints_satisfied = "
-              << (solution.hard_constraints_satisfied ? "yes" : "no")
-              << "):\n";
+    const auto& c = solution.cost;
+    std::cout << "Solver result (hard_constraints_satisfied = "
+              << (solution.hard_constraints_satisfied ? "yes" : "no") << ")\n"
+              << "  total=" << c.total
+              << "  overlap=" << c.overlap
+              << "  floor=" << c.floor
+              << "  prior=" << c.prior
+              << "  transport=" << c.transport << "\n";
     for (std::size_t i = 0; i < layout.problem.stations.size(); ++i) {
         const auto& s = layout.problem.stations[i];
         const auto& p = solution.station_poses[i];

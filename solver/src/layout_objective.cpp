@@ -86,15 +86,22 @@ bool hard_constraints_satisfied(const LayoutProblem& problem,
         throw std::invalid_argument(
             "hard_constraints_satisfied: pose count does not match problem.stations.size()");
     }
+    // Penalty-based feasibility is approximate by construction: a
+    // smooth optimiser will converge to within its tolerance of the
+    // constraint boundary, leaving a residual penalty no larger than
+    // the square of that tolerance. Treat anything below the threshold
+    // below as effectively zero. (1 micrometre² of overlap, 1 micrometre²
+    // of out-of-floor extent - far below any real engineering tolerance.)
+    constexpr double kFeasibilityEps = 1e-6;
     for (std::size_t i = 0; i < problem.stations.size(); ++i) {
         const auto& s = problem.stations[i];
-        if (floor_penalty(poses[i], s.bounding_radius, problem.floor) > 0.0) {
+        if (floor_penalty(poses[i], s.bounding_radius, problem.floor) > kFeasibilityEps) {
             return false;
         }
         for (std::size_t j = i + 1; j < problem.stations.size(); ++j) {
             const auto& s2 = problem.stations[j];
             if (overlap_penalty(poses[i], s.bounding_radius,
-                                poses[j], s2.bounding_radius) > 0.0) {
+                                poses[j], s2.bounding_radius) > kFeasibilityEps) {
                 return false;
             }
         }

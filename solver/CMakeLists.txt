@@ -1,3 +1,5 @@
+find_package(NLopt CONFIG REQUIRED)
+
 add_library(tinycell_solver STATIC
     src/allocator.cpp
     src/anchor_strategy.cpp
@@ -17,6 +19,10 @@ target_include_directories(tinycell_solver PUBLIC
 )
 target_link_libraries(tinycell_solver
     PUBLIC TinyCell::core
+    # NLopt is PRIVATE: nlopt headers are confined to layout_problem.cpp
+    # so consumers of TinyCell::solver don't see NLopt types - keeps the
+    # solve() seam library-agnostic per CLAUDE.md 9.
+    PRIVATE NLopt::nlopt
 )
 target_compile_features(tinycell_solver PUBLIC cxx_std_20)
 add_library(TinyCell::solver ALIAS tinycell_solver)

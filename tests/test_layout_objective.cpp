@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 #include <cmath>
 #include <mp-units/systems/si.h>
+#include <numbers>
 #include <stdexcept>
 #include <tinycell/solver/layout_objective.hpp>
 #include <tinycell/solver/layout_problem.hpp>
@@ -134,6 +135,43 @@ TEST(PriorPenalty, SquaredDistance) {
     EXPECT_NEAR(ts::prior_penalty(pose, nominal), 25.0, 1e-12);
 }
 
+// ---- transport_penalty ---------------------------------------------------
+
+TEST(TransportPenalty, ZeroWhenPortsCoincide) {
+    // Two stations sitting on top of each other with ports at their
+    // origins → port_world coincides for both → zero penalty.
+    auto a = pose_at(2.0, 3.0);
+    auto b = pose_at(2.0, 3.0);
+    tc::Vec2 zero{0.0 * metre, 0.0 * metre};
+    EXPECT_NEAR(ts::transport_penalty(a, zero, b, zero), 0.0, 1e-12);
+}
+
+TEST(TransportPenalty, SquaredDistanceBetweenPortWorldPositions) {
+    // Station A at (0, 0) with port at (1, 0) station-frame → port_world = (1, 0).
+    // Station B at (5, 0) with port at (-1, 0) station-frame → port_world = (4, 0).
+    // Distance = 3, penalty = 9.
+    auto a = pose_at(0.0, 0.0);
+    auto b = pose_at(5.0, 0.0);
+    tc::Vec2 port_a{1.0 * metre, 0.0 * metre};
+    tc::Vec2 port_b{-1.0 * metre, 0.0 * metre};
+    EXPECT_NEAR(ts::transport_penalty(a, port_a, b, port_b), 9.0, 1e-12);
+}
+
+TEST(TransportPenalty, RespectsStationRotation) {
+    // Station A at origin rotated 90° CCW with port at local (1, 0).
+    // After rotation, the port points along +y; port_world = (0, 1).
+    // Station B at (0, 3) with port at origin; port_world = (0, 3).
+    // Distance = 2, penalty = 4.
+    tc::Pose2D a{
+        .x = 0.0 * metre, .y = 0.0 * metre,
+        .theta = (std::numbers::pi / 2.0) * radian, .frame = tc::kWorldFrame,
+    };
+    auto b = pose_at(0.0, 3.0);
+    tc::Vec2 port_a{1.0 * metre, 0.0 * metre};
+    tc::Vec2 port_b{0.0 * metre, 0.0 * metre};
+    EXPECT_NEAR(ts::transport_penalty(a, port_a, b, port_b), 4.0, 1e-9);
+}
+
 // ---- evaluate_objective + hard_constraints_satisfied ---------------------
 
 TEST(EvaluateObjective, RejectsPoseCountMismatch) {
@@ -143,6 +181,115 @@ TEST(EvaluateObjective, RejectsPoseCountMismatch) {
         .weights = ts::ObjectiveWeights{},
     };
     EXPECT_THROW(ts::evaluate_objective(p, {}), std::invalid_argument);
+}
+
+TEST(EvaluateObjective, IncludesTransportTerm) {
+    // Two stations far enough apart not to overlap; one transport
+    // edge connects A's port at (1, 0) station-frame to B's port at
+    // (-1, 0) station-frame. With A at (0, 0) and B at (5, 0), port
+    // distance = (4 - 1) = 3 m → transport penalty = 9. No overlap, no
+    // floor violation, prior at exact nominal: only the transport term
+    // contributes. Weight = 1 → total = 9.
+    ts::LayoutProblem p{
+        .stations = {
+            ts::StationProblem{
+                .id = "a", .buffered_hull = {},
+                .bounding_radius = 0.5 * metre,
+                .nominal = tc::Vec2{0.0 * metre, 0.0 * metre},
+                .initial_pose = pose_at(0.0, 0.0),
+            },
+            ts::StationProblem{
+                .id = "b", .buffered_hull = {},
+                .bounding_radius = 0.5 * metre,
+                .nominal = tc::Vec2{5.0 * metre, 0.0 * metre},
+                .initial_pose = pose_at(5.0, 0.0),
+            },
+        },
+        .transports = {
+            ts::TransportConstraint{
+                .source_station = 0,
+                .source_port_local = tc::Vec2{1.0 * metre, 0.0 * metre},
+                .sink_station = 1,
+                .sink_port_local = tc::Vec2{-1.0 * metre, 0.0 * metre},
+            },
+        },
+        .floor = ts::Floor{-10.0 * metre, 10.0 * metre, -10.0 * metre, 10.0 * metre},
+        .weights = ts::ObjectiveWeights{
+            .overlap = 1.0, .floor = 1.0, .positional_prior = 0.0, .transport = 1.0,
+        },
+    };
+    const std::vector<tc::Pose2D> poses{
+        p.stations[0].initial_pose, p.stations[1].initial_pose,
+    };
+    EXPECT_NEAR(ts::evaluate_objective(p, poses), 9.0, 1e-9);
+}
+
+TEST(EvaluateObjective, TransportTermDecreasesAsStationsApproach) {
+    // Single transport edge, no other penalties active. Moving the
+    // sink station from x=10 to x=8 to x=6 must monotonically reduce
+    // the transport penalty.
+    ts::LayoutProblem p{
+        .stations = {
+            ts::StationProblem{
+                .id = "src", .buffered_hull = {},
+                .bounding_radius = 0.1 * metre,
+                .nominal = tc::Vec2{0.0 * metre, 0.0 * metre},
+                .initial_pose = pose_at(0.0, 0.0),
+            },
+            ts::StationProblem{
+                .id = "dst", .buffered_hull = {},
+                .bounding_radius = 0.1 * metre,
+                .nominal = tc::Vec2{10.0 * metre, 0.0 * metre},
+                .initial_pose = pose_at(10.0, 0.0),
+            },
+        },
+        .transports = {
+            ts::TransportConstraint{
+                .source_station = 0,
+                .source_port_local = tc::Vec2{0.0 * metre, 0.0 * metre},
+                .sink_station = 1,
+                .sink_port_local = tc::Vec2{0.0 * metre, 0.0 * metre},
+            },
+        },
+        .floor = ts::Floor{-20.0 * metre, 20.0 * metre, -10.0 * metre, 10.0 * metre},
+        .weights = ts::ObjectiveWeights{
+            .overlap = 0.0, .floor = 0.0, .positional_prior = 0.0, .transport = 1.0,
+        },
+    };
+    const auto src = p.stations[0].initial_pose;
+    const double obj_at_10 = ts::evaluate_objective(p, {src, pose_at(10.0, 0.0)});
+    const double obj_at_8  = ts::evaluate_objective(p, {src, pose_at( 8.0, 0.0)});
+    const double obj_at_6  = ts::evaluate_objective(p, {src, pose_at( 6.0, 0.0)});
+    EXPECT_GT(obj_at_10, obj_at_8);
+    EXPECT_GT(obj_at_8,  obj_at_6);
+    // Concrete check: at 10 the distance is 10 → penalty 100; at 6 → 36.
+    EXPECT_NEAR(obj_at_10, 100.0, 1e-9);
+    EXPECT_NEAR(obj_at_6,   36.0, 1e-9);
+}
+
+TEST(EvaluateObjective, RejectsTransportWithOutOfRangeStation) {
+    ts::LayoutProblem p{
+        .stations = {
+            ts::StationProblem{
+                .id = "a", .buffered_hull = {},
+                .bounding_radius = 0.1 * metre,
+                .nominal = tc::Vec2{0.0 * metre, 0.0 * metre},
+                .initial_pose = pose_at(0.0, 0.0),
+            },
+        },
+        .transports = {
+            ts::TransportConstraint{
+                .source_station = 0,
+                .source_port_local = tc::Vec2{0.0 * metre, 0.0 * metre},
+                .sink_station = 5,  // out of range
+                .sink_port_local = tc::Vec2{0.0 * metre, 0.0 * metre},
+            },
+        },
+        .floor = ts::Floor{-10.0 * metre, 10.0 * metre, -10.0 * metre, 10.0 * metre},
+        .weights = ts::ObjectiveWeights{},
+    };
+    EXPECT_THROW(ts::evaluate_objective(p, {p.stations[0].initial_pose}),
+                 std::invalid_argument);
 }
 
 TEST(EvaluateObjective, SumsAllTermsWithWeights) {

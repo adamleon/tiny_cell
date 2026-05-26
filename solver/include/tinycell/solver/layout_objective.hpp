@@ -36,10 +36,23 @@ double floor_penalty(const core::Pose2D& pose, core::Length radius,
 // the nominal.
 double prior_penalty(const core::Pose2D& pose, const core::Vec2& nominal);
 
-// Sum the three terms across the whole problem, weighted by
+// Transport-edge soft term: squared distance between the source port
+// and sink port in world coords. port_*_local is in the source/sink
+// station's frame; this function composes each with the corresponding
+// station pose to get the port's world position. Quadratic-from-zero,
+// smooth everywhere; minimum at coincident endpoints. The Phase-1
+// transport term (step 6); deferred follow-ups (port direction
+// tolerances, real belt geometry) will land on top of this.
+double transport_penalty(const core::Pose2D& pose_src,
+                         const core::Vec2& port_src_local,
+                         const core::Pose2D& pose_sink,
+                         const core::Vec2& port_sink_local);
+
+// Sum the four terms across the whole problem, weighted by
 // problem.weights. Pose count must match problem.stations.size();
 // throws std::invalid_argument otherwise. The pair-wise overlap
-// term sums over each unordered pair once.
+// term sums over each unordered pair once; the transport term sums
+// over each TransportConstraint once.
 double evaluate_objective(const LayoutProblem& problem,
                           const std::vector<core::Pose2D>& poses);
 

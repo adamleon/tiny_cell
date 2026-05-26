@@ -270,6 +270,55 @@ TEST(LayoutSolve, WarmStartFromPreviousSolutionIsStable) {
     EXPECT_LE(out2.final_objective, out1.final_objective + 1e-6);
 }
 
+// ---- Step 6 Phase 1: transport-distance term ----------------------------
+
+TEST(LayoutSolve, TransportPullsStationTowardAnchor) {
+    // Movable station A nominally at (0, 0). Frozen anchor B pinned at
+    // (10, 0). A transport edge connects them at station-origin ports.
+    // Without the transport term, A stays at its nominal; with the
+    // transport term, A should be pulled measurably toward the anchor
+    // along +x.
+    auto a = make_station("a", 0.0, 0.0, 0.5, 0.0, 0.0);
+    auto b = make_station("anchor", 10.0, 0.0, 0.5, 10.0, 0.0);
+    b.frozen = true;
+
+    const tc::Vec2 zero{0.0 * metre, 0.0 * metre};
+
+    // Baseline: no transport. A stays near (0, 0) (prior pulls it
+    // there; nothing pulls it elsewhere).
+    ts::LayoutProblem p_no_xport{
+        .stations = {a, b},
+        .transports = {},
+        .floor = ts::Floor{-5.0 * metre, 20.0 * metre, -5.0 * metre, 5.0 * metre},
+        .weights = ts::ObjectiveWeights{
+            .overlap = 1000.0, .floor = 1000.0,
+            .positional_prior = 1.0, .transport = 0.0,
+        },
+    };
+    auto out_no_xport = ts::solve(p_no_xport);
+    const double x_no_xport = out_no_xport.station_poses[0].x.numerical_value_in(metre);
+    EXPECT_NEAR(x_no_xport, 0.0, 0.1);  // sits at nominal
+
+    // With transport (weight = prior weight): A balances prior pull at
+    // 0 against transport pull at 10. At equal weights and quadratic
+    // penalties on both terms the minimum is the midpoint x = 5.
+    ts::LayoutProblem p_with_xport = p_no_xport;
+    p_with_xport.transports = {
+        ts::TransportConstraint{
+            .source_station = 0, .source_port_local = zero,
+            .sink_station = 1,   .sink_port_local = zero,
+        },
+    };
+    p_with_xport.weights.transport = 1.0;
+    auto out_with_xport = ts::solve(p_with_xport);
+    const double x_with_xport = out_with_xport.station_poses[0].x.numerical_value_in(metre);
+    EXPECT_NEAR(x_with_xport, 5.0, 0.1);  // midpoint between nominal (0) and anchor (10)
+    EXPECT_GT(x_with_xport, x_no_xport + 1.0);  // unambiguously pulled
+
+    // Anchor doesn't move (frozen).
+    EXPECT_NEAR(out_with_xport.station_poses[1].x.numerical_value_in(metre), 10.0, 1e-9);
+}
+
 TEST(LayoutSolve, ObjectiveDecreasesFromInfeasibleSeed) {
     // Property: starting from any infeasible state, the optimised
     // objective is strictly lower than the initial objective.

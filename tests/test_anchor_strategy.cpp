@@ -71,7 +71,13 @@ TEST(AnchorStrategy, AppliesToAnchorTasksOnly) {
     EXPECT_FALSE(s.applies_to(make_palletize()));
 }
 
-TEST(AnchorStrategy, EmitsPortConstraintAtWorldPose) {
+TEST(AnchorStrategy, EmitsPortConstraintAtStationOrigin) {
+    // PortConstraint coordinates are station-frame by convention
+    // (port.hpp). For an anchor, the station sits at the world pose
+    // named by AnchorParams, so the port goes at (0, 0, 0) in station
+    // frame — the world pose is recovered by composing with the
+    // anchor's station_pose, which the LayoutProblem builder pins from
+    // the same AnchorParams. The world pose is not duplicated here.
     ts::AnchorStrategy s;
     const double theta = std::numbers::pi / 4.0;  // 45 deg
     auto result = s.evaluate(make_anchor(3.0, -2.0, theta));
@@ -81,8 +87,8 @@ TEST(AnchorStrategy, EmitsPortConstraintAtWorldPose) {
     ASSERT_EQ(result.port_constraints.size(), 1u);
     const auto& pc = result.port_constraints[0];
     EXPECT_EQ(pc.port_name, "port");
-    EXPECT_NEAR(pc.x.numerical_value_in(metre), 3.0, 1e-9);
-    EXPECT_NEAR(pc.y.numerical_value_in(metre), -2.0, 1e-9);
-    EXPECT_NEAR(pc.theta.numerical_value_in(radian), theta, 1e-9);
+    EXPECT_NEAR(pc.x.numerical_value_in(metre), 0.0, 1e-9);
+    EXPECT_NEAR(pc.y.numerical_value_in(metre), 0.0, 1e-9);
+    EXPECT_NEAR(pc.theta.numerical_value_in(radian), 0.0, 1e-9);
     EXPECT_NEAR(pc.direction_tolerance.numerical_value_in(radian), 0.0, 1e-9);
 }

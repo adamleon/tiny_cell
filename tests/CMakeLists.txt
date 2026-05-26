@@ -153,3 +153,12 @@ target_link_libraries(test_layout_solve PRIVATE
     GTest::gtest_main
 )
 add_test(NAME test_layout_solve COMMAND test_layout_solve)
+
+add_executable(test_lns test_lns.cpp)
+target_link_libraries(test_lns PRIVATE
+    TinyCell::core
+    TinyCell::solver
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_lns COMMAND test_lns)

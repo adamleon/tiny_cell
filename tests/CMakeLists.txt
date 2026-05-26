@@ -135,3 +135,12 @@ target_link_libraries(test_positional_prior PRIVATE
     GTest::gtest_main
 )
 add_test(NAME test_positional_prior COMMAND test_positional_prior)
+
+add_executable(test_layout_objective test_layout_objective.cpp)
+target_link_libraries(test_layout_objective PRIVATE
+    TinyCell::core
+    TinyCell::solver
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_layout_objective COMMAND test_layout_objective)

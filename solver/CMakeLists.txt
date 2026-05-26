@@ -5,6 +5,8 @@ add_library(tinycell_solver STATIC
     src/cost.cpp
     src/pusher_strategy.cpp
     src/enumerator.cpp
+    src/layout_objective.cpp
+    src/layout_problem.cpp
     src/motion_model.cpp
     src/positional_prior.cpp
     src/state_propagation.cpp

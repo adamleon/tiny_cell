@@ -103,7 +103,21 @@ tc::Task make_feeder(const std::string& id, double world_x, double world_y) {
         .id = id,
         .params = tc::AnchorParams{
             .name = id,
-            .role = tc::PortDirection::Output,
+            .role = tc::PortDirection::Output,  // emits items into the cell
+            .world_x = world_x * metre,
+            .world_y = world_y * metre,
+            .world_theta = 0.0 * radian,
+        },
+        .target_ct_per_item = tc::CycleTimePerItem{1.0 * second},
+    };
+}
+
+tc::Task make_dispatch(const std::string& id, double world_x, double world_y) {
+    return tc::Task{
+        .id = id,
+        .params = tc::AnchorParams{
+            .name = id,
+            .role = tc::PortDirection::Input,  // receives full pallets leaving the cell
             .world_x = world_x * metre,
             .world_y = world_y * metre,
             .world_theta = 0.0 * radian,
@@ -401,13 +415,25 @@ int main() {
         &arm_strategy, &pusher_strategy, &transfer_strategy, &anchor_strategy};
 
     const std::vector<tc::Task> workflow{
-        make_feeder("t_feeder", 0.0, 0.0),
+        // Anchors: feeder pinned at world origin, dispatch pinned at
+        // (20, 0). The prior pinning matches the workflow geometry.
+        make_feeder("t_feeder",     0.0,  0.0),
+        make_dispatch("t_dispatch", 20.0, 0.0),
+        // Palletize tasks.
         make_palletize("t_pallet_a",     5.0, 1.2, 0.8, 24, 5.0),
         make_palletize("t_pallet_b",     5.0, 1.2, 0.8, 24, 5.0),
         make_palletize("t_pallet_tight", 8.0, 2.0, 2.0, 12, 2.0),
-        make_transport("t_xport_a",     "t_feeder", "port", "t_pallet_a",     "item_in", 5.0),
-        make_transport("t_xport_b",     "t_feeder", "port", "t_pallet_b",     "item_in", 5.0),
-        make_transport("t_xport_tight", "t_feeder", "port", "t_pallet_tight", "item_in", 2.0),
+        // Item flow: feeder -> each palletize's item_in.
+        make_transport("t_xport_in_a",     "t_feeder", "port", "t_pallet_a",     "item_in", 5.0),
+        make_transport("t_xport_in_b",     "t_feeder", "port", "t_pallet_b",     "item_in", 5.0),
+        make_transport("t_xport_in_tight", "t_feeder", "port", "t_pallet_tight", "item_in", 2.0),
+        // Pallet flow: each palletize's pallet_out -> dispatch.
+        // target_ct_per_item is per pallet here (= cycle_time of the
+        // palletize task); magical TransferStrategy beats any positive
+        // target, so the value just needs to be > 0.
+        make_transport("t_xport_out_a",     "t_pallet_a",     "pallet_out", "t_dispatch", "port", 120.0),
+        make_transport("t_xport_out_b",     "t_pallet_b",     "pallet_out", "t_dispatch", "port", 120.0),
+        make_transport("t_xport_out_tight", "t_pallet_tight", "pallet_out", "t_dispatch", "port",  24.0),
     };
 
     const auto enumeration = ts::enumerate(workflow, strategies);

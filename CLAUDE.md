@@ -75,23 +75,24 @@ Classify the tier *before* running the re-solve. Sync scope is determined by tie
 
 ## 5. Open decisions — do not lock in code
 
-- **Optimizer libraries (Layer 2/3):** unchosen. Keep the seam abstract. (§9)
-- **Cycle-time allocation across stations:** unresolved and **gates Layer 2** (`roadmap.md`) — how a whole-cell cycle-time target splits across stations for capacity packing. Do not build Layer 2 until decided.
-- **Dependency manager (packaged libs):** vcpkg vs. Conan — [OPEN], leaning vcpkg; the real tiebreaker is OR-Tools/IPOPT-on-Windows build pain, settled by a proof-of-concept spike at Layer 3, not before. threepp is FetchContent regardless. Does not block `core/`. (`engineering.md` §2.3)
+- **Optimizer library (Layer 2):** unchosen. Keep the seam abstract. (§9. Layer 3 settled: NLopt/BOBYQA via vcpkg — `decisions.md` "Layer-3 NLP backend".)
+- **Standards clearance numbers:** `standards.md` is a stub. Do **not** invent numeric clearances — they come from the standard or a safety engineer. Build the cache/geometry pipeline with a placeholder buffer; wire real values later without structural change. Step-6 M3 lands domain-credible (not certified) numbers as part of the realistic-palletizer scenario. (`standards.md`)
 - **Sync transactional rollback:** deferred; MVP staged-then-commit. (§11)
-- **Standards clearance numbers:** `standards.md` is a stub. Do **not** invent numeric clearances — they come from the standard or a safety engineer. Build the cache/geometry pipeline with a placeholder buffer; wire real values later without structural change. (`standards.md`)
+- **Belt placement: sequential vs joint:** sequential at MVP (route straight-line belts between resolved port positions after station placement); joint deferred until a real failure case appears. `decisions.md` "Belt geometry: sequential placement at MVP".
+- **`StationTemplate` abstraction:** deferred — palletizer's templated-ish pallet ports are hardcoded inside `ArmStrategy` for MVP. Promote when multi-equipment stations land. `decisions.md` "Pallet ports as templated Point regions".
+- **LNS outer loop:** **parked on `feature/step-6-lns`.** Built + evaluated; doesn't earn its keep on single-station destroy + smooth NLP inner. Resurrects when destroy operators broaden or objective becomes non-smooth. `decisions.md` "MVP re-scoped".
 
-Infra decisions already settled (do not re-litigate, see `engineering.md` §5): C++20 fixed (no modules / no `import std;`); CMake 3.28+; MSVC 194+ / GCC 13+ / Clang 17+ with Windows in CI day-one and GCC/Clang as conformance oracle; GoogleTest; typed `ParseError` at `io/` + assert/throw at `sync/`; mp-units contract checking ON in debug *and* release, pinned explicitly; `std::format` with fmtlib as MSVC fallback.
+Already settled (do not re-litigate): cycle-time allocation moved to the workflow-translator phase, not the solver (`decisions.md` "Per-task throughput target"). Dependency manager vcpkg, validated by the Layer-3 spike (`decisions.md` "Layer-3 NLP backend"). Infra decisions (`engineering.md` §5): C++20 fixed (no modules / no `import std;`); CMake 3.28+; MSVC 194+ / GCC 13+ / Clang 17+ with Windows in CI day-one and GCC/Clang as conformance oracle; GoogleTest; typed `ParseError` at `io/` + assert/throw at `sync/`; mp-units contract checking ON in debug *and* release, pinned explicitly; `std::format` with fmtlib as MSVC fallback.
 
 ---
 
 ## 6. MVP scope — what to build vs. skip
 
-MVP is **solver + `core/` only**, batch, no GUI (`roadmap.md`). Build order: catalog/strategy library → brute-force validator → item-state propagation → Layer 2 → Layer 3 → LNS.
+MVP is **solver + `core/` only**, batch, no GUI (`roadmap.md`). Build order: catalog/strategy library → brute-force validator → item-state propagation → Layer 2 allocation (sharing inactive in first scenario) → Layer 3 placement (with transport-distance term) → **port regions → belt geometry → realistic palletizer scenario**. LNS is **parked** after evaluation showed the inner problem was the limiting factor; see `decisions.md` "MVP re-scoped (2026-05-27)".
 
 - **Do NOT scaffold `sync/`, `ecs/`, `render/`, or `gui/` yet** — they are post-MVP. The §11 sync contract, §4.4 ECS mapping, §7 render conversion, and the right half of the module index (§0) describe the eventual system, not the MVP. Their rules still bind *when* those modules are built; they are simply not in the first milestone.
 - **`svg/` IS in MVP scope** — debug oracle for any solver layer that produces geometry (`roadmap.md` "Supporting tools"). Build incrementally per layer that needs it, not as a separate milestone. Distinct from `render/`: SVG is stdlib-only batch output for diff-friendly inspection; `render/` is interactive 3D via threepp and arrives post-MVP. The two coexist after MVP.
 - `core/` (geometry, units, model) is the foundation everything else needs and has zero external dependencies — start there, it has no build-standup blocker.
 - **Windows is day-one even though the GUI is not.** `core/` and `solver/` must build and pass tests on MSVC from the first commit; deferring threepp/ImGui defers the GUI, *not* Windows. MVP dependency surface is small — mp-units, Boost.Geometry, glm — and builds cleanly under either dependency manager. (`engineering.md` §2.2, §6)
 - **Build/error decisions block the first line of `core/`** and are already settled (§5 above, `engineering.md`) precisely so they don't stall you: C++20, CMake 3.28+, the compiler set, and the typed-exception / assert-throw error split must be in place before `core/` compiles. Mechanical style is enforced by committed `.clang-format`/`.clang-tidy`, not prose (`engineering.md` §2.5).
-- Steps 1–3 (catalog → brute-force → item-state) are fully ready. Layer 2 has the cycle-time gate above; Layers 3/LNS depend on the optimizer choice (§9). The brute-force enumerator (step 2) **is** the strategy-library test harness, not a throwaway (`engineering.md` §4.2).
+- Steps 1–5 done (catalog → brute-force → item-state → Layer 2 → Layer 3 with transport-distance term + decomposed cost). Step 6 in flight as port-regions → belt-geometry → realistic-palletizer per `roadmap.md`. The brute-force enumerator (step 2) **is** the strategy-library test harness, not a throwaway (`engineering.md` §4.2).

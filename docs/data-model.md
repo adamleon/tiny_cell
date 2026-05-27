@@ -37,7 +37,7 @@ Strategy.evaluate(task, context) -> StrategyResult {
   shareable:      bool,                        // can this instance serve other tasks?
   energy_per_cycle: joules,                    // primary objective (units: §6)
   cycle_time:     seconds,                      // this task's contribution
-  poses:          { pickup?, dropoff?, anchor?, segment? },
+  port_constraints:   [PortConstraint],            // one record per (port_name × constraint source); multiple stack
   requires_state:     predicate(ItemState),         // STATE precondition (§4)
   effect:             ItemState -> ItemState,       // how this equipment mutates planner state (§4)
   preconditions:  [Task],                       // STRUCTURAL preconditions — AND children
@@ -45,10 +45,39 @@ Strategy.evaluate(task, context) -> StrategyResult {
 }
 ```
 
+`port_constraints` carries the strategy's contribution to the placer's per-port hard regions + soft preferences (see §2.2 below). Replaces the earlier `poses: { pickup?, dropoff?, anchor?, segment? }` sketch — `Task.task_ports()` declares the logical ports a task exposes; each strategy that binds to the task contributes regions for those ports.
+
 - **Capex is NOT on the strategy.** It lives on the catalog entry, resolved at binding time (same strategy + same model = same price regardless of task). See `decisions.md`.
 - **Energy IS on the strategy** — it depends on the motion the task requires.
 
-### 2.1 Guards vs. preconditions
+### 2.1 Logical ports and PortConstraint [MVP — step 6]
+
+A task declares **logical ports** (named I/O channels for items flowing in or out) via `Task::task_ports()` — the kind alone determines the set. For a Palletize task: `item_in`, `pallet_in`, `pallet_out`. Logical ports are geometry-free; they say "this task has an item-input channel," not where it sits.
+
+Strategies emit **PortConstraint** records that ground the logical ports in geometry. Each constraint scopes one equipment's contribution to one port:
+
+```
+PortConstraint {
+  port_name:            string,                 // matches a logical port
+  region:               PortRegion,             // hard constraint, station-frame
+  preferred_radius:     Length | null,          // soft preference (annulus regions only)
+  theta:                Angle,                  // port flow direction in station frame
+  direction_tolerance:  Angle,                  // 0 = strict; pi/2 = any-direction-within-reach
+}
+
+PortRegion =
+  | Point   { x, y }                            // pusher: stroke endpoint
+  | Annulus { center: Vec2, r_min, r_max }      // arm: anywhere within reach
+  | Polygon { vertices }                        // intersection of multiple equipment regions
+```
+
+**Multiple constraints per port stack.** Each logical port becomes one position-variable in the inter-station placer. Every strategy contribution that influences that port emits its own `PortConstraint` with the same `port_name`; the placer sums the region-membership penalties. A port reachable by three arms gets three annulus penalties — the equilibrium is the intersection without us pre-computing a polygon. (Decision in `decisions.md` "Port regions: hard constraints + optional preferences, multiple stack on the same port".)
+
+**Equipment-driven flexibility differs by kind.** An arm projects its port into space (the arm itself stays put; the port can land anywhere in the arm's reach annulus). A pusher *contains* its port (the port is welded to the pusher's stroke endpoint; moving the port means moving the pusher and hence the station's footprint). The strategy emits the region kind appropriate to its equipment — annulus or point.
+
+**Templated-ish for known geometry.** For a palletizer, the pallet stack sits at a fixed offset from the robot in real cells. `ArmStrategy` emits `pallet_in` and `pallet_out` as Point regions at a station-frame offset (currently ~60% of reach along +x); only `item_in` stays Annulus. The "template" is hardcoded inside the strategy at MVP — a separate `StationTemplate` abstraction would earn its keep when multi-equipment stations land (`roadmap.md`).
+
+### 2.2 Guards vs. preconditions
 
 | | Guard | Precondition (Task) |
 |---|---|---|
@@ -81,6 +110,8 @@ CatalogEntry {
 **Two geometry classes** (matters for placement & cost):
 - **Point/footprint** (arm, gripper, camera, pusher, fixture): anchors to a pose; footprint & cost fixed at binding.
 - **Segment** (conveyor): connects from-pose → to-pose; length/footprint/capex/energy are **layout-dependent**, re-evaluated each optimizer iteration.
+
+**Belt/conveyor catalog (`BeltSpec`)** lands in step 6 M2. Fields beyond the common `CatalogEntry` shape: `width: Length`, `min_length: Length`, `max_length: Length`, `speed: Velocity`, throughput-per-second. The allocator-output sibling `PlacedBelt` (start_pose + end_pose + width + catalog reference) is *not* a `BoundInstance` variant — point and linear placed objects are different enough in their per-instance optimisation variables (one pose vs a route) that conflating them would force pervasive variant-handling. See `decisions.md` "Belts are linear placed objects, sibling type to `BoundInstance`".
 
 ### 3.1 Station footprint cache
 

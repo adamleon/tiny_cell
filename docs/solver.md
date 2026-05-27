@@ -45,18 +45,18 @@ Two sharing levels (see glossary): strategy-class reuse (matching) and instance 
 
 ### Layer 3 — Continuous layout [MVP]
 
-**Variables.** Per-station `(x, y, θ)` for inter-station placement, plus **per-port `(x, y)`** in the station's frame for every logical port whose `PortConstraint.region` allows movement (annulus / polygon — point-region ports have no variable, they're welded to a fixed offset). Belt routing variables land in step-6 M2; today transports are abstract edges between port positions. Geometry is **2D** (footprints + reach circles), not 3D kinematics **[deferred]**.
+**Variables (today).** Per-station `(x, y, θ)` for inter-station placement; port positions are fixed offsets in the station frame (everything-at-(0,0) for arms, stroke endpoint for pushers). Step-6 M1 plans to add per-port (x, y) variables constrained by region — see `roadmap.md`. Belt routing variables land in M2; today transports are abstract edges between fixed port offsets composed with station pose. Geometry is **2D** (footprints + reach circles), not 3D kinematics **[deferred]**.
 
-**Hard constraints:** no footprint overlap; no overlap with blueprint obstacles; within floor bounds; **port-region membership** (each port variable must lie inside its `PortRegion`; multiple constraints with the same port_name stack — equilibrium is the intersection); safety clearances from `standards.md`.
+**Hard constraints:** no footprint overlap; no overlap with blueprint obstacles; within floor bounds; reach feasibility (assigned task points within reach envelopes — currently bounding-circle proxy); safety clearances from `standards.md`. M1 adds port-region membership when ports become variables.
 
 **Objective:** minimize energy cost (primary) + capex + conveyor/transfer length, plus soft terms:
 - **Transport distance:** sum of squared distances between connected port-world positions (port-local composed with station pose). Added step 6 Phase 1 — the term that makes the placer care about moving stations toward what they exchange items with. See `decisions.md` "Transport-distance term".
-- **Port preference (reach-band):** annulus-region ports carry a quadratic penalty around `preferred_radius` (midpoint of reach for arms). Soft — keeps the arm centred in its useful band without locking the port to a circle.
+- **Reach-band preference:** penalty for pickup/dropoff outside 30–70% of reach (planned with M1 — needs per-port positions to be meaningful).
 - **Workflow positional prior** (below).
 
-**Cost decomposition.** `solve()` returns `LayoutSolution.cost: ObjectiveBreakdown` carrying the per-term weighted contributions plus their sum, not a flat scalar — consumers (LNS trace, debugging, future GUI) need to attribute changes to a specific term. See `decisions.md` "Decomposed cost on `LayoutSolution`".
+**Cost decomposition.** `solve()` returns `LayoutSolution.cost: ObjectiveBreakdown` carrying the per-term weighted contributions plus their sum, not a flat scalar — consumers (debugging, future LNS trace, future GUI) need to attribute changes to a specific term. See `decisions.md` "Decomposed cost on `LayoutSolution`".
 
-**Method.** NLP via NLopt `LN_BOBYQA` (derivative-free, handles the C0 kinks of `max(0, depth)²` penalties gracefully). Floor as hard NLopt bounds; overlap and port-region penalties as soft. If infeasible, propagate back: invalidate the Layer 2 binding, possibly the Layer 1 strategy choice, record the conflicting combination. Algorithm choice + library are recorded in `decisions.md` ("Layer-3 NLP backend" and "Layer-3 algorithm").
+**Method.** NLP via NLopt `LN_BOBYQA` (derivative-free, handles the C0 kinks of `max(0, depth)²` penalties gracefully). Floor as hard NLopt bounds; overlap as soft penalty. If infeasible, propagate back: invalidate the Layer 2 binding, possibly the Layer 1 strategy choice, record the conflicting combination. Algorithm choice + library are recorded in `decisions.md` ("Layer-3 NLP backend" and "Layer-3 algorithm").
 
 ### Outer loop — Large Neighborhood Search + simulated annealing [deferred from MVP]
 

@@ -20,21 +20,34 @@ namespace tc = tinycell::core;
 // Arm-emitted PortConstraints for a Palletize task. Arms can pick/place
 // from anywhere within their reach envelope, so direction tolerance is
 // pi/2 (any direction within +/- 90 degrees works) — the arm rotates to
-// service the connected transport's direction. All three ports sit at
-// the station origin (= the arm base for the one-instance-per-station
-// pattern current at MVP); refinements to non-origin positions arrive
-// when the placer needs more spatial precision (Phase D or later).
-std::vector<tc::PortConstraint> arm_palletize_port_constraints() {
+// service the connected transport's direction. item_in is emitted as a
+// reach ANNULUS: the arm picks the incoming item from anywhere in its
+// reach band, so the placer may slide that port within [min,max] of the
+// base (made a variable in M1.4). pallet_in / pallet_out are fixed POINTS
+// at a templated offset along +x (~60% of reach), co-located because one
+// pallet belt passes through the station (roadmap.md M1). The 60% factor
+// is a crude template hardcoded here; promoting it to a StationTemplate
+// type is M4 (decisions.md "Pallet ports as templated Point regions").
+std::vector<tc::PortConstraint> arm_palletize_port_constraints(const tc::ArmSpec& arm) {
     constexpr auto kLoose = (std::numbers::pi / 2.0) * si::radian;
+    // Pallet ports sit at a templated offset along +x (~60% of reach).
+    const auto pallet_x = 0.6 * arm.reach.max_radius.value();
     return {
+        // item_in: ANNULUS port. reach band = the chosen arm's reach
+        // envelope; the placer may slide this port within it (variable in
+        // M1.4). (x,y) is the seed; origin is fine before the placer runs.
         {.port_name = "item_in",
          .x = 0.0 * si::metre, .y = 0.0 * si::metre,
-         .theta = 0.0 * si::radian, .direction_tolerance = kLoose},
+         .theta = 0.0 * si::radian, .direction_tolerance = kLoose,
+         .reach_min = arm.reach.min_radius,
+         .reach_max = arm.reach.max_radius.value()},
+        // pallet_in / pallet_out: fixed POINT ports, co-located at the
+        // templated +x offset (reach_min/reach_max left unset).
         {.port_name = "pallet_in",
-         .x = 0.0 * si::metre, .y = 0.0 * si::metre,
+         .x = pallet_x, .y = 0.0 * si::metre,
          .theta = 0.0 * si::radian, .direction_tolerance = kLoose},
         {.port_name = "pallet_out",
-         .x = 0.0 * si::metre, .y = 0.0 * si::metre,
+         .x = pallet_x, .y = 0.0 * si::metre,
          .theta = 0.0 * si::radian, .direction_tolerance = kLoose},
     };
 }
@@ -198,7 +211,7 @@ StrategyResult ArmStrategy::evaluate(const tc::Task& task) const {
                 .preconditions = {},
                 .requires_state = state_in,
                 .effect = effect_out,
-                .port_constraints = arm_palletize_port_constraints(),
+                .port_constraints = arm_palletize_port_constraints(*c.arm),
             };
         }
     }
@@ -229,7 +242,7 @@ StrategyResult ArmStrategy::evaluate(const tc::Task& task) const {
         .preconditions = {residual},
         .requires_state = state_in,
         .effect = effect_out,
-        .port_constraints = arm_palletize_port_constraints(),
+        .port_constraints = arm_palletize_port_constraints(*best.arm),
     };
 }
 

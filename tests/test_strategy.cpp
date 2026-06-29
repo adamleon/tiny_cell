@@ -256,6 +256,42 @@ TEST(ArmStrategy, FeasibleResultEmitsLoosePortConstraints) {
     }
 }
 
+TEST(ArmStrategy, ItemInIsReachAnnulusPalletPortsAreOffsetPoints) {
+    auto arms = kuka_arms();
+    ts::ArmStrategy strategy(arms);
+    auto result = strategy.evaluate(small_palletize_task());
+    ASSERT_EQ(result.feasibility, ts::Feasibility::FULL);
+    ASSERT_TRUE(result.equipment.has_value());
+
+    // Look up the arm the strategy actually chose, to compare its reach.
+    auto arm_it = std::find_if(arms.begin(), arms.end(),
+        [&](const tc::ArmSpec& a) { return a.id == result.equipment->catalog_id; });
+    ASSERT_NE(arm_it, arms.end());
+
+    const auto* item_in = find_port(result.port_constraints, "item_in");
+    const auto* pallet_in = find_port(result.port_constraints, "pallet_in");
+    const auto* pallet_out = find_port(result.port_constraints, "pallet_out");
+    ASSERT_NE(item_in, nullptr);
+    ASSERT_NE(pallet_in, nullptr);
+    ASSERT_NE(pallet_out, nullptr);
+
+    // item_in is an ANNULUS: its reach band equals the chosen arm's reach.
+    ASSERT_TRUE(item_in->reach_min.has_value());
+    ASSERT_TRUE(item_in->reach_max.has_value());
+    EXPECT_NEAR(item_in->reach_min->numerical_value_in(si::metre),
+                arm_it->reach.min_radius.numerical_value_in(si::metre), 1e-9);
+    EXPECT_NEAR(item_in->reach_max->numerical_value_in(si::metre),
+                arm_it->reach.max_radius.value().numerical_value_in(si::metre), 1e-9);
+
+    // pallet_in / pallet_out are fixed POINTS (no annulus) at a non-zero
+    // +x offset, co-located (single pallet belt passes through the station).
+    EXPECT_FALSE(pallet_in->reach_max.has_value());
+    EXPECT_FALSE(pallet_out->reach_max.has_value());
+    EXPECT_GT(pallet_in->x.numerical_value_in(si::metre), 0.0);
+    EXPECT_NEAR(pallet_in->x.numerical_value_in(si::metre),
+                pallet_out->x.numerical_value_in(si::metre), 1e-9);
+}
+
 TEST(ArmStrategy, InfeasibleResultHasNoPortConstraints) {
     auto arms = kuka_arms();
     ts::ArmStrategy strategy(arms);

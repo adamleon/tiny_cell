@@ -19,6 +19,7 @@
 // it from a Task. Strategies refine — they don't redeclare ports the
 // task didn't name.
 
+#include <optional>
 #include <string>
 #include <tinycell/model/task.hpp>
 #include <vector>
@@ -53,12 +54,33 @@ struct LogicalPort {
 // strict alignment (e.g. pusher stroke is fixed), pi/2 means any
 // direction within ±90° works (e.g. an arm can pick from anywhere
 // within its reach).
+// Reach annulus (step-6 M1). A port is one of two kinds, distinguished
+// by whether reach_max is set:
+//   * POINT (reach_max == nullopt) — welded at (x, y) in the station
+//     frame, exactly as before M1. Every pre-M1 emitter is a Point by
+//     default-init: it sets x/y/theta/tolerance and leaves the optionals
+//     unset. Pusher and pallet ports stay Points.
+//   * ANNULUS (reach_max set) — the port may be PLACED ANYWHERE in the
+//     ring [reach_min, reach_max] around the station origin; the Layer-3
+//     placer treats its (x, y) as a variable constrained to that band
+//     (an arm's item_in port can pick from anywhere in the reach
+//     envelope). (x, y) then carries the SEED/initial port position, not
+//     a fixed weld. reach_min unset is treated as 0 (a disc, not a true
+//     annulus) when reach_max is given.
+// This deliberately does NOT introduce a Point/Annulus/Polygon variant
+// taxonomy: the single-palletizer scenario needs exactly one variable-
+// port kind, so the optional-annulus form is the crudest thing that
+// works (roadmap.md M1 "concepts under discussion"; CLAUDE.md
+// crudest-concrete-first). Promote to a variant only when a second
+// region shape (e.g. a polygon intersection) earns it.
 struct PortConstraint {
     std::string port_name;        // matches a LogicalPort.name on the task
     Length x;
     Length y;
     Angle theta;                  // port "flow direction" in the station frame
     Angle direction_tolerance;    // 0 = strict; pi/2 = any-direction-within-reach
+    std::optional<Length> reach_min;  // annulus inner radius; unset => 0 when reach_max set
+    std::optional<Length> reach_max;  // set => ANNULUS (variable); unset => POINT (welded at x,y)
 };
 
 // Derive the logical port set for a task from its kind. Each task

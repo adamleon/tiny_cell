@@ -4,6 +4,26 @@ Checkable constraints for code *content*. Companion layers: `architecture.md` is
 
 ---
 
+## Session contract — read first (anti-stray gate)
+
+*This project's recurring failure mode is **straying**: sessions redesign the solver, build abstractions with no consumer, or implement post-MVP modules — instead of doing the next concrete step. The design docs are the attractor; they describe a finished system in loving detail and read like a backlog. They are not. Hold the line below before doing anything else.*
+
+**Where we are** (update this line when a milestone lands): Steps 1–5 done. Step-6 Phase 1 (transport term) + Phase 2 (decomposed cost) are on `dev`. **The next code is step-6 M1 — port regions.** (`roadmap.md`.)
+
+**Before writing any code, state two things explicitly:**
+1. The single `roadmap.md` build-order step or step-6 milestone (M1/M2/M3/M4) this change serves.
+2. That the file you're about to touch is in the MVP source set **{`core`, `solver`, `io`, `svg`, `adapters`}** (+ `tests`, `demos`).
+If you can't state both, stop — you're about to stray.
+
+- **`roadmap.md` is the only thing that authorizes new work.** `architecture.md`, `data-model.md`, and `interaction.md` describe the **END STATE**, never a task list. Their finished detail for `sync/`, `ecs/`, `render/`, `gui/`, the LNS outer loop, the tier system, and the StationFootprint cache does **NOT** mean build them now. None of those four dirs exist on disk — if you're about to create one, **STOP** (§6).
+- **Crudest-concrete-first.** An unclear interface is not license to defer the concrete work. Build the smallest concrete thing that works for one real scenario and let the interface emerge; hardcode a template inside the strategy before inventing a `StationTemplate` (that's M4). (`decisions.md` "Concrete-vs-abstract interpretation correction".)
+- **Do not redesign the solver** (Layer-1 OR-tree → Layer-2 alloc → Layer-3 NLP → LNS) or swap the optimizer paradigm. If a better search/planner formulation tempts you, extract only the local refinement that has a named consumer and stop. (`decisions.md` "Means-ends … not adopted".)
+- **Do not build the general form before a consumer exists** (per-DOF position, vector-`StrategyResult`, variant loader, `StationTemplate`). Every such refactor is documented as "mechanical at that point" — defer it.
+- **Verify, don't assert.** Build and run `ctest` before claiming anything passes — never report green from reading the code. Build loop: vcpkg at `%VCPKG_ROOT%`; configure with `cmake --preset default` from a "Developer PowerShell for VS 2022 Build Tools" shell (so `cl` is on PATH), then `cmake --build` and `ctest`. (`engineering.md`.)
+- **Trust code over prose.** `grep` before relying on a "we have X" doc claim — some entries describe intent that never shipped (e.g. the Layer-2 exact validator). When code and a doc disagree, the code is the truth; fix the doc or build the thing, but never assume the safety net.
+
+---
+
 ## 0. Before writing in a directory — the module index
 
 Obey the row for the module you are editing. This is the first thing to check.

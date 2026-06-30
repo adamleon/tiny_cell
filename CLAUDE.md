@@ -8,7 +8,7 @@ Checkable constraints for code *content*. Companion layers: `architecture.md` is
 
 *This project's recurring failure mode is **straying**: sessions redesign the solver, build abstractions with no consumer, or implement post-MVP modules — instead of doing the next concrete step. The design docs are the attractor; they describe a finished system in loving detail and read like a backlog. They are not. Hold the line below before doing anything else.*
 
-**Where we are** (update this line when a milestone lands): Steps 1–5 done. Step-6 Phase 1 (transport term) + Phase 2 (decomposed cost) are on `dev`. **The next code is step-6 M1 — port regions.** (`roadmap.md`.)
+**Where we are** (update this line when a milestone lands): Steps 1–5 done. Step-6 Phase 1+2 on `dev`. Step-6 **M1 (port regions) in progress**: M1.1 (optional reach-annulus fields on `PortConstraint`), M1.2 (arm emits `item_in` as annulus, pallet ports at +x offset), M1.3 (soft `annulus_penalty` on the objective) are committed and green. **The next code is M1.4 — make the annulus port a placer variable** (the structural NLP change), then M1.5 (demo/SVG). See `HANDOFF.md` for the live plan. (`roadmap.md`.)
 
 **Before writing any code, state two things explicitly:**
 1. The single `roadmap.md` build-order step or step-6 milestone (M1/M2/M3/M4) this change serves.

@@ -9,8 +9,12 @@ permanent docs are `CLAUDE.md` (rules + anti-stray session contract), `docs/road
 
 ## Where we are
 
-- Branch: `dev` (pushed to `origin/dev`). All work below is **committed**.
-- **16/16 tests green** (`ctest`) as of the last commit.
+- Branch: `dev` (pushed to `origin/dev`). M1.1–M1.3 are **committed**; **M1.4 is
+  implemented and green in the working tree but NOT yet committed** (awaiting the
+  go-ahead to commit).
+- **16/16 test binaries green** (`ctest`), including 3 new M1.4 cases in
+  `tests/test_layout_solve.cpp` (default-weight band hold, frozen-station port,
+  both-ends-annulus ordering).
 - Milestone: **step-6 M1 "port regions"** — ports become placer variables.
   Crudest concrete form only: optional reach-annulus fields on `PortConstraint`,
   **NOT** a Point/Annulus/Polygon variant taxonomy (that's deferred).
@@ -34,39 +38,26 @@ the allocator "exact validator" claim (it's greedy-only) + the stale pusher
 
 ---
 
-## NEXT: M1.4 — make the annulus port a placer variable  ⚠ the structural one
+## DONE (working tree, uncommitted): M1.4 — annulus port is a placer variable
 
-Single file: `solver/src/layout_problem.cpp`. This is the commit with teeth.
+Implemented in `solver/src/layout_problem.cpp` (+ `layout_objective.{hpp,cpp}` overloads,
+`layout_problem.hpp` `LayoutSolution::transports` field) and `tests/test_layout_solve.cpp`.
+Variable vector is `[ station pairs: 2*n_variable_stations ) [ port pairs: 2*n_ports )`;
+`poses_from_vars` reads only the station block (unchanged). Each annulus endpoint is two
+variables in **polar `(r, θ)`** form, `r` hard-bounded to `[reach_min, reach_max]`.
 
-Today `solve()` optimizes only per-station `(x, y)`:
-- the variable vector is sized **`2 * n_variable_stations`**,
-- `poses_from_vars` (~lines 31–50) maps `v[2k], v[2k+1]` → station k's translation,
-- station `theta` is held fixed at `initial_pose.theta` (~line 44) — **keep it fixed**;
-  adding theta as a variable is a separate deferred follow-up and would also break the
-  `2*k` indexing if done casually,
-- bounds loop is ~lines 154–179; NLopt `LN_BOBYQA` driver ~line 181; all-frozen fast
-  path ~lines 113–138.
+**Design correction vs the original plan (#4):** the plan said the band would be held by
+the M1.3 soft `annulus_penalty` with the box "just a sanity clamp." An adversarial review
+(ran a probe through `solve()`) showed that's false — at the *default* weights the port
+pinned to the cartesian box edge at **~2× the arm's reach** and was reported feasible. A
+finite-weight soft penalty can't hold a hard radial band against the transport pull. Fix:
+polar parametrisation makes the band an **exact, weight-independent** box on `r`, and keeps
+the objective smooth so BOBYQA can swing the port around the ring (a cartesian radial
+*projection*, tried first, stalled BOBYQA on the swing — see git history of this session).
+The soft penalty is kept as a redundant backstop; `reach_min > reach_max` is rejected.
+Logged in `decisions.md` "Annulus reach-band enforced as a HARD polar (r, θ) box".
 
-The change, **all in one commit**:
-1. Append **two extra variables per annulus transport-endpoint** (the port's
-   station-frame x, y) AFTER the station pairs. Define the ordering explicitly:
-   `[ station pairs 0..2*n_stations ) then [ port pairs ]`.
-2. Rework `poses_from_vars` AND the bounds loop **together** so the `2*k` assumption
-   stays coherent — this is the main risk the adversarial review flagged.
-3. Thread the optimized port-local through the objective closure so
-   `transport_penalty` / `annulus_penalty` read the *optimized* port position
-   (not the fixed seed). Point ports stay welded (no variable).
-4. **Band enforcement = the soft `annulus_penalty` from M1.3.** An annulus is a radius
-   constraint and is NOT expressible as NLopt box bounds (box bounds are axis-aligned).
-   Use loose box bounds only as a sanity clamp; the penalty is load-bearing.
-5. **Behavior-preserving regression test first**: a Point-only problem (no annulus
-   endpoints) must solve to the IDENTICAL result as today — proves the indexing rework
-   didn't disturb the existing path before any port goes variable.
-6. Verify (extend `tests/test_layout_solve.cpp`, mirror `TransportPullsStationTowardAnchor`):
-   a 1-arm + 1-anchor problem places `item_in` off-origin at a radius inside the reach
-   band; `hard_constraints_satisfied` still true.
-
-## THEN: M1.5 — demo + SVG wiring (closes M1)
+## NEXT: M1.5 — demo + SVG wiring (closes M1)
 
 `demos/solve_workflow/main.cpp`:
 - `build_layout_problem`'s transport loop (~lines 327–351) currently copies only

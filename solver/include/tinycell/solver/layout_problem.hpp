@@ -147,6 +147,17 @@ struct LayoutSolution {
     // LayoutProblem.stations.
     std::vector<core::Pose2D> station_poses;
 
+    // Effective transports at the solution (step-6 M1.4): same order and
+    // count as LayoutProblem::transports, but each ANNULUS endpoint's
+    // port_local holds the OPTIMISED station-frame position the placer
+    // chose for that port, constrained to its [reach_min, reach_max] band
+    // (annulus ports are placer variables in polar form; the band is
+    // enforced as a hard constraint). POINT endpoints (reach_max unset) pass through with
+    // their problem port_local unchanged. Consumers read this to draw or
+    // inspect where a reach-annulus port actually landed; `cost` below is
+    // evaluated against these same port positions.
+    std::vector<TransportConstraint> transports;
+
     // Weighted per-term breakdown at the returned poses. `total` is
     // the scalar to compare across solutions; the per-term fields tell
     // you which constraint or soft term drove the move. Lower is
@@ -167,8 +178,11 @@ struct LayoutSolution {
 // the optimised world-frame poses for every station. Frozen stations
 // pass through unchanged in station_poses but still appear in the
 // objective evaluation. Phase E backed this with NLopt/BOBYQA;
-// Phase F added partial-freeze. The signature is library-neutral so
-// the backend can be swapped without touching callers.
+// Phase F added partial-freeze. Step-6 M1.4 additionally makes each
+// ANNULUS transport endpoint (reach_max set) a placer variable: its
+// station-frame port_local is optimised within the reach band and
+// returned in LayoutSolution::transports. The signature is
+// library-neutral so the backend can be swapped without touching callers.
 LayoutSolution solve(const LayoutProblem& problem);
 
 } // namespace tinycell::solver

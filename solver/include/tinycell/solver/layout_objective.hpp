@@ -75,6 +75,22 @@ double evaluate_objective(const LayoutProblem& problem,
 ObjectiveBreakdown decompose_objective(const LayoutProblem& problem,
                                        const std::vector<core::Pose2D>& poses);
 
+// Overloads scoring an EXPLICIT transport set instead of
+// problem.transports (step-6 M1.4). The placer's NLopt callback uses
+// these to evaluate the OPTIMISED annulus-port positions, which live in
+// the variable vector rather than in problem.transports. Station and
+// pose data still come from `problem`; `transports` supplies the
+// (possibly port-substituted) edges. The no-transport-arg overloads
+// above delegate here with problem.transports, so both paths run the
+// same code.
+double evaluate_objective(const LayoutProblem& problem,
+                          const std::vector<core::Pose2D>& poses,
+                          const std::vector<TransportConstraint>& transports);
+
+ObjectiveBreakdown decompose_objective(const LayoutProblem& problem,
+                                       const std::vector<core::Pose2D>& poses,
+                                       const std::vector<TransportConstraint>& transports);
+
 // After-the-fact hard-constraint check: returns true iff
 // overlap_penalty + floor_penalty over the whole problem is exactly
 // zero at the given poses. Used by solve() to set

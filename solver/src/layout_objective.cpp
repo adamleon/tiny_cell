@@ -89,7 +89,8 @@ double annulus_penalty(const tc::Vec2& port_local,
 }
 
 ObjectiveBreakdown decompose_objective(const LayoutProblem& problem,
-                                       const std::vector<tc::Pose2D>& poses) {
+                                       const std::vector<tc::Pose2D>& poses,
+                                       const std::vector<TransportConstraint>& transports) {
     if (poses.size() != problem.stations.size()) {
         throw std::invalid_argument(
             "decompose_objective: pose count does not match problem.stations.size()");
@@ -108,7 +109,7 @@ ObjectiveBreakdown decompose_objective(const LayoutProblem& problem,
                 poses[j], s2.bounding_radius);
         }
     }
-    for (const auto& tr : problem.transports) {
+    for (const auto& tr : transports) {
         if (tr.source_station >= problem.stations.size() ||
             tr.sink_station >= problem.stations.size()) {
             throw std::invalid_argument(
@@ -119,7 +120,9 @@ ObjectiveBreakdown decompose_objective(const LayoutProblem& problem,
             poses[tr.sink_station],   tr.sink_port_local);
         // Annulus term for any endpoint that is a reach-annulus port
         // (reach_max set). reach_min defaults to 0 (a disc) when only
-        // reach_max is given.
+        // reach_max is given. The port_local read here is whatever the
+        // caller supplied in `transports` — for the placer's callback
+        // that is the OPTIMISED port position (M1.4).
         if (tr.source_reach_max.has_value()) {
             const tc::Length rmin = tr.source_reach_min.value_or(0.0 * si::metre);
             b.annulus += w.annulus *
@@ -135,9 +138,20 @@ ObjectiveBreakdown decompose_objective(const LayoutProblem& problem,
     return b;
 }
 
+ObjectiveBreakdown decompose_objective(const LayoutProblem& problem,
+                                       const std::vector<tc::Pose2D>& poses) {
+    return decompose_objective(problem, poses, problem.transports);
+}
+
+double evaluate_objective(const LayoutProblem& problem,
+                          const std::vector<tc::Pose2D>& poses,
+                          const std::vector<TransportConstraint>& transports) {
+    return decompose_objective(problem, poses, transports).total;
+}
+
 double evaluate_objective(const LayoutProblem& problem,
                           const std::vector<tc::Pose2D>& poses) {
-    return decompose_objective(problem, poses).total;
+    return evaluate_objective(problem, poses, problem.transports);
 }
 
 bool hard_constraints_satisfied(const LayoutProblem& problem,

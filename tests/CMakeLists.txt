@@ -171,3 +171,12 @@ target_link_libraries(test_workflow_validation PRIVATE
     GTest::gtest_main
 )
 add_test(NAME test_workflow_validation COMMAND test_workflow_validation)
+
+add_executable(test_station_template test_station_template.cpp)
+target_link_libraries(test_station_template PRIVATE
+    TinyCell::core
+    TinyCell::solver
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_station_template COMMAND test_station_template)

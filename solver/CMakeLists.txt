@@ -13,6 +13,7 @@ add_library(tinycell_solver STATIC
     src/motion_model.cpp
     src/positional_prior.cpp
     src/state_propagation.cpp
+    src/station_template.cpp
     src/transfer_strategy.cpp
     src/workflow_validation.cpp
 )

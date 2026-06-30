@@ -1,17 +1,19 @@
-// INTENT: step-6 M3 — the realistic palletizer scenario, the MVP go/no-go
-// (roadmap.md step-6 M3). A recognisable TWO-LINE palletizing PLANT: one
-// shared box infeed feeds two robot palletizing cells — a HEAVY-product
-// line (large arm) and a LIGHT-product line (small arm) — each with its
-// own empty-pallet supply and a shared full-pallet dispatch. The two lines
-// bind to DIFFERENT arms (different payloads → different catalog ids → the
-// allocator never collapses them), and their targets are generous enough
-// that each is a clean single-arm FULL (no PARTIAL chaining, so no orphan
-// residual arm — the artefact the old crammed 3-task scenario produced).
+// INTENT: step-6 M4 capstone — a DUAL-PALLET robotic palletizing cell, the
+// realistic configuration that makes the intra-station layout a genuine
+// sub-problem (roadmap.md step-6 M4). ONE big arm (KUKA KR 120 PA, 3.2 m
+// reach) serves TWO pallet build positions, alternating between them to hide
+// pallet-change dead time. The two Palletize tasks are identical, so the
+// allocator SHARES them onto a single arm — a station that physically holds
+// the arm + two pallet zones. The intra-station template
+// (solver/station_template) lays the two pallet positions out within the
+// arm's reach and CHECKS they fit; the inter-station placer then sites the
+// whole cell amid the material-flow anchors.
 //
-// This demo IS the scenario: a robotic palletizing plant, so the strategy
-// set is arm + transfer + anchor (PusherStrategy is deliberately omitted —
-// arm-vs-pusher OR-tree competition is exercised in the brute_force /
-// layer_2 demos; here every cell is a robot).
+// (Earlier milestones this demo carried, now covered by tests + git history:
+// M3 the two-line realistic plant; M4.1 the accumulated multi-equipment
+// footprint; M4.2 the convex-polygon narrow-phase overlap. The strategy set
+// is arm + transfer + anchor — a robot cell; arm-vs-pusher competition lives
+// in the brute_force / layer_2 demos.)
 //
 // Pipeline:
 //   1. validate_workflow(workflow)              (step-6 M3, net-new)
@@ -70,6 +72,7 @@
 #include <tinycell/solver/enumerator.hpp>
 #include <tinycell/solver/layout_objective.hpp>
 #include <tinycell/solver/layout_problem.hpp>
+#include <tinycell/solver/station_template.hpp>
 #include <tinycell/solver/transfer_strategy.hpp>
 #include <tinycell/solver/workflow_validation.hpp>
 #include <tinycell/svg.hpp>
@@ -298,20 +301,18 @@ tc::Polygon accumulate_hull(std::span<const tc::Polygon> parts) {
     return adapters::convex_hull(all);
 }
 
-// The pallet build zone for a palletizer arm: a footprint the size of the
-// pallet plus a working margin (room for the place motion), centred at the
-// templated pallet offset (~60% of reach along +x — the same offset
-// ArmStrategy puts the pallet ports at). Station-frame.
+// A pallet build-zone footprint (the pallet plus a working margin for the
+// place motion) centred at a slot the intra-station template chose (M4
+// capstone). Station-frame; axis-aligned.
 constexpr double kPalletWorkMargin_m = 0.25;
-tc::Polygon pallet_zone_footprint(const tc::ArmSpec& arm,
-                                  const tc::PalletizeParams& p) {
-    const double offset =
-        0.6 * arm.reach.max_radius.value().numerical_value_in(metre);
+tc::Polygon pallet_zone_at(const tc::Vec2& centre, const tc::PalletizeParams& p) {
+    const double cx = centre.x.numerical_value_in(metre);
+    const double cy = centre.y.numerical_value_in(metre);
     const double hw =
         0.5 * p.pallet.physical.width.numerical_value_in(metre) + kPalletWorkMargin_m;
     const double hl =
         0.5 * p.pallet.physical.length.numerical_value_in(metre) + kPalletWorkMargin_m;
-    return rect(offset, 0.0, hw, hl);
+    return rect(cx, cy, hw, hl);
 }
 
 // Find the PalletizeParams of a task by id (used to size a palletizer's
@@ -341,10 +342,17 @@ struct LayoutBuildResult {
     ts::LayoutProblem problem;
     std::vector<StationSource> sources;
     std::map<std::string, std::size_t> task_to_station;  // task_id -> station index
-    // M4: per-station pallet build zone in STATION frame (empty polygon
-    // when the station has none — anchors, pushers). Parallel to
-    // problem.stations; the SVG draws it inside the cell.
-    std::vector<tc::Polygon> pallet_zone_local;
+    // M4 capstone: per-station pallet build zones in STATION frame (one cell
+    // can hold SEVERAL — a dual-pallet palletizer). Parallel to
+    // problem.stations (empty list for anchors); the SVG draws them.
+    std::vector<std::vector<tc::Polygon>> pallet_zones_local;
+    // task_id -> its assigned pallet slot centre (station frame), so the
+    // pallet_in / pallet_out transport endpoints land on the actual zone the
+    // intra-station layout chose, not the strategy's single templated offset.
+    std::map<std::string, tc::Vec2> task_pallet_slot;
+    // Intra-station feasibility diagnostics (a cell whose pallets don't fit
+    // the arm's reach). Non-empty => the layout is not physically realizable.
+    std::vector<std::string> cell_diagnostics;
 };
 
 // Look up the winning StrategyResult's PortConstraint for (task_id,
@@ -385,18 +393,43 @@ LayoutBuildResult build_layout_problem(
     for (std::size_t i = 0; i < alloc.instances.size(); ++i) {
         const auto& bi = alloc.instances[i];
 
-        // M4: assemble the station's equipment in its station frame. A
-        // palletizer (ArmStrategy) is the arm at the origin PLUS a real
-        // pallet-zone footprint; other equipment classes are single-part.
+        // M4 capstone: assemble the station's equipment in its station
+        // frame. A palletizer (ArmStrategy) is the arm at the origin PLUS one
+        // pallet build zone per served Palletize task — a station serving two
+        // Palletize tasks is a DUAL-PALLET cell. The intra-station template
+        // (layout_palletizer_cell) places the pallet slots within the arm's
+        // reach and reports whether they fit; the demo turns each slot into a
+        // zone footprint here (the hull/buffer stays caller-side per §1).
         std::vector<tc::Polygon> parts{lookup_footprint(bi, arms, pushers)};
-        tc::Polygon pallet_zone;  // empty unless this is a palletizer cell
-        if (bi.strategy_name == "ArmStrategy" && !bi.served.empty()) {
+        std::vector<tc::Polygon> zones;  // this cell's pallet zones (SVG)
+        if (bi.strategy_name == "ArmStrategy") {
             const auto* arm_spec = find_arm(arms, bi.catalog_id);
-            const auto* pp =
-                find_palletize_params(enumeration, bi.served.front().task_id);
-            if (arm_spec != nullptr && pp != nullptr) {
-                pallet_zone = pallet_zone_footprint(*arm_spec, *pp);
-                parts.push_back(pallet_zone);
+            std::vector<std::string> pallet_tasks;  // served Palletize tasks, in order
+            const tc::PalletizeParams* pp = nullptr;
+            for (const auto& s : bi.served) {
+                if (const auto* q = find_palletize_params(enumeration, s.task_id)) {
+                    pallet_tasks.push_back(s.task_id);
+                    if (pp == nullptr) pp = q;  // shared arm => identical pallets
+                }
+            }
+            if (arm_spec != nullptr && pp != nullptr && !pallet_tasks.empty()) {
+                const auto cell = ts::layout_palletizer_cell(
+                    arm_spec->reach.min_radius, arm_spec->reach.max_radius.value(),
+                    pp->pallet.physical.width, pp->pallet.physical.length,
+                    kPalletWorkMargin_m * metre, static_cast<int>(pallet_tasks.size()));
+                if (!cell.feasible) {
+                    result.cell_diagnostics.push_back(
+                        "instance_" + std::to_string(bi.id) + " (" + bi.catalog_id +
+                        ", " + std::to_string(pallet_tasks.size()) + " pallet(s)): " +
+                        cell.diagnostic);
+                }
+                for (std::size_t k = 0;
+                     k < cell.slots.size() && k < pallet_tasks.size(); ++k) {
+                    auto zone = pallet_zone_at(cell.slots[k].centre, *pp);
+                    parts.push_back(zone);
+                    zones.push_back(std::move(zone));
+                    result.task_pallet_slot[pallet_tasks[k]] = cell.slots[k].centre;
+                }
             }
         }
 
@@ -420,7 +453,7 @@ LayoutBuildResult build_layout_problem(
             .frozen = false,
         });
         result.sources.push_back({StationSourceKind::Instance, i});
-        result.pallet_zone_local.push_back(pallet_zone);
+        result.pallet_zones_local.push_back(std::move(zones));
 
         const std::size_t station_idx = result.problem.stations.size() - 1;
         for (const auto& s : bi.served) {
@@ -442,7 +475,7 @@ LayoutBuildResult build_layout_problem(
             .frozen = true,
         });
         result.sources.push_back({StationSourceKind::Anchor, i});
-        result.pallet_zone_local.push_back(tc::Polygon{});  // anchors have none
+        result.pallet_zones_local.push_back({});  // anchors have no pallet zones
         result.task_to_station[a.task_id] = result.problem.stations.size() - 1;
     }
 
@@ -473,17 +506,33 @@ LayoutBuildResult build_layout_problem(
                       << "' has no PortConstraint on source or sink; skipped\n";
             continue;
         }
+        // Effective port position: a pallet_in / pallet_out endpoint lands on
+        // the actual SLOT the intra-station layout assigned that task (M4
+        // capstone — distinct per pallet in a dual-pallet cell), instead of
+        // the strategy's single templated offset. item_in (annulus) and
+        // anchor ports keep the emitted PortConstraint position.
+        auto effective_port = [&](const std::string& task_id,
+                                  const std::string& port_name,
+                                  const tc::PortConstraint* pc) -> tc::Vec2 {
+            if (port_name == "pallet_in" || port_name == "pallet_out") {
+                const auto it = result.task_pallet_slot.find(task_id);
+                if (it != result.task_pallet_slot.end()) return it->second;
+            }
+            return tc::Vec2{pc->x, pc->y};
+        };
+
         // Carry each endpoint's reach band (step-6 M1) so the placer sees
         // an ANNULUS port where the strategy emitted one (ArmStrategy's
         // item_in): reach_max set => the placer optimises that port's
-        // position within [reach_min, reach_max] of its station origin,
-        // with (x, y) above as the seed. Point ports leave the optionals
-        // unset and stay welded.
+        // position within [reach_min, reach_max] of its station origin.
+        // Point ports leave the optionals unset and stay welded.
         result.problem.transports.push_back(ts::TransportConstraint{
             .source_station = src_st->second,
-            .source_port_local = tc::Vec2{src_pc->x, src_pc->y},
+            .source_port_local =
+                effective_port(edge.source_task_id, edge.source_port_name, src_pc),
             .sink_station = dst_st->second,
-            .sink_port_local = tc::Vec2{dst_pc->x, dst_pc->y},
+            .sink_port_local =
+                effective_port(edge.sink_task_id, edge.sink_port_name, dst_pc),
             .source_reach_min = src_pc->reach_min,
             .source_reach_max = src_pc->reach_max,
             .sink_reach_min = dst_pc->reach_min,
@@ -501,7 +550,7 @@ void draw_layout_svg(const ts::LayoutSolution& solution,
                      const ts::AllocationResult& alloc,
                      const std::vector<tc::ArmSpec>& arms,
                      std::span<const ts::PlacedBelt> belts,
-                     const std::vector<tc::Polygon>& pallet_zones,
+                     const std::vector<std::vector<tc::Polygon>>& pallet_zones,
                      const std::filesystem::path& out_path) {
     // viewBox: floor extended by 10 % margin.
     const double xmin = problem.floor.x_min.numerical_value_in(metre);
@@ -592,13 +641,17 @@ void draw_layout_svg(const ts::LayoutSolution& solution,
         // Accumulated cell keep-out (buffered hull of all equipment).
         w.polygon(tc::apply(t_world, station.buffered_hull),
                   "rgba(0,0,0,0.04)", "rgba(0,0,0,0.35)", 0.03);
-        // Reserved pallet build zone (M4 — the pallet position as floor).
-        if (!pallet_zones[i].empty()) {
-            w.polygon(tc::apply(t_world, pallet_zones[i]),
+        // Reserved pallet build zones (M4 — the pallet positions as floor;
+        // a dual-pallet cell has two). Each is labelled "pallet N".
+        for (std::size_t z = 0; z < pallet_zones[i].size(); ++z) {
+            const auto& zone = pallet_zones[i][z];
+            if (zone.empty()) continue;
+            w.polygon(tc::apply(t_world, zone),
                       "rgba(160,110,40,0.22)", "rgba(120,80,20,0.85)", 0.03);
-            w.text(tc::apply(t_world, tc::Vec2{
-                       pallet_zones[i].front().x, pallet_zones[i].front().y}),
-                   "pallet", 0.18, "rgba(90,60,15,0.95)");
+            char lbl[16];
+            std::snprintf(lbl, sizeof(lbl), "pallet %zu", z + 1);
+            w.text(tc::apply(t_world, tc::Vec2{zone.front().x, zone.front().y}),
+                   lbl, 0.18, "rgba(90,60,15,0.95)");
         }
         // The arm's own base plate, drawn on top so the robot base reads
         // distinctly from the accumulated cell keep-out. (A pusher cell —
@@ -667,59 +720,51 @@ int main() {
     const auto belt_catalog = io::load_belt_catalog(
         repo / "assets" / "belt" / "generic" / "catalog.json");
 
-    // Robotic palletizing PLANT: arm + transfer + anchor only. Pusher is
-    // deliberately omitted (this scenario is two robot cells; arm-vs-pusher
-    // OR-tree competition lives in the brute_force / layer_2 demos). The
-    // pusher CATALOG is still loaded — lookup_footprint stays general — it
-    // just has no instances here.
+    // Robotic palletizing cell: arm + transfer + anchor only (pusher omitted
+    // — this is a robot cell; arm-vs-pusher competition lives in the
+    // brute_force / layer_2 demos). The pusher CATALOG is still loaded so
+    // lookup_footprint stays general; it just has no instances here.
     ts::ArmStrategy arm_strategy(arms);
     ts::TransferStrategy transfer_strategy;
     ts::AnchorStrategy anchor_strategy;
     const std::vector<const ts::Strategy*> strategies{
         &arm_strategy, &transfer_strategy, &anchor_strategy};
 
-    // ---- the scenario: a two-line palletizing plant -------------------
-    // One shared box infeed (feeder) splits to two robot cells:
-    //   * HEAVY line (north): 25 kg cases onto a 1.2 x 1.0 m pallet —
-    //     payload forces a large arm (KUKA KR 30, 2.1 m reach).
-    //   * LIGHT line (south): 5 kg cartons onto a 1.2 x 0.8 m pallet —
-    //     a small arm (KUKA KR 6, 0.9 m reach) suffices.
-    // Different payloads → different catalog ids → the allocator binds two
-    // distinct arms (never collapses them). Generous per-box targets
-    // (8 s / 6 s — ~7-10 boxes/min, realistic palletizing rates) keep each
-    // a clean single-arm FULL: no PARTIAL, hence no orphan residual arm.
-    // Each cell has its own empty-pallet supply (north/south, which also
-    // pulls the two arms apart into two rows) and both ship to one shared
-    // dispatch. Anchor world poses lay the material flow out as two rows.
+    // ---- the scenario: a DUAL-PALLET robotic palletizing cell ----------
+    // (step-6 M4 capstone) The textbook robotic palletizer: ONE big arm
+    // (50 kg cases → KUKA KR 120 PA, 3.2 m reach) serving TWO pallet build
+    // positions, alternating between them to hide pallet-change dead time.
+    // The two Palletize tasks are IDENTICAL (same product), so the allocator
+    // SHARES them onto one arm — a single cell that physically holds the arm
+    // + two pallet zones. That makes the intra-station layout a real problem:
+    // the two pallet positions must both sit within the arm's reach without
+    // colliding (layout_palletizer_cell, the M4 capstone), not just a single
+    // fixed offset. A box infeed feeds both, each pallet has its own
+    // empty-pallet supply, and both full pallets ship to one dispatch.
     const std::vector<tc::Task> workflow{
-        // Anchors (frozen world poses). The empty-pallet supplies sit only
-        // modestly off the centreline (±3 m) and the cells are seeded close
-        // to it (±1.2 m, below) — so the material flow draws the two lines
-        // into the feeder→dispatch corridor and they settle ~2.4 m apart,
-        // just clear of footprint contact. The point of the M4.2 narrow phase
-        // is that this spacing is PERMITTED at all: the cells are elongated
-        // (arm + offset pallet zone), so a bounding-CIRCLE overlap test would
-        // spuriously force them ~2× farther apart (their circles overlap at
-        // 2.4 m even though their footprints don't). The demo prints that
-        // circle-vs-polygon contrast after solving.
-        make_feeder("t_feeder",    0.0,  0.0),   // box infeed (shared)
-        make_feeder("t_empty_n",  10.0,  3.0),   // empty-pallet supply, north line
-        make_feeder("t_empty_s",  10.0, -3.0),   // empty-pallet supply, south line
-        make_dispatch("t_dispatch", 16.0, 0.0),  // full-pallet outfeed (shared)
-        // Palletize tasks (the two robot cells).
-        make_palletize("t_pal_heavy", 25.0, 1.2, 1.0, 16, 8.0),  // north
-        make_palletize("t_pal_light",  5.0, 1.2, 0.8, 30, 6.0),  // south
-        // Box flow: shared feeder -> each cell's item_in (reach annulus).
-        make_transport("t_box_heavy", "t_feeder", "port", "t_pal_heavy", "item_in", 8.0),
-        make_transport("t_box_light", "t_feeder", "port", "t_pal_light", "item_in", 6.0),
-        // Empty-pallet flow: each line's supply -> its pallet_in.
-        make_transport("t_empty_in_heavy", "t_empty_n", "port", "t_pal_heavy", "pallet_in", 60.0),
-        make_transport("t_empty_in_light", "t_empty_s", "port", "t_pal_light", "pallet_in", 60.0),
-        // Full-pallet flow: each line's pallet_out -> shared dispatch.
-        // target is per pallet; magical TransferStrategy beats any
-        // positive target, so the value just needs to be > 0.
-        make_transport("t_full_heavy", "t_pal_heavy", "pallet_out", "t_dispatch", "port", 120.0),
-        make_transport("t_full_light", "t_pal_light", "pallet_out", "t_dispatch", "port", 120.0),
+        // Anchors (frozen world poses), laid out around the cell.
+        make_feeder("t_feeder",    0.0,  0.0),   // box infeed
+        make_feeder("t_empty_a",   9.0,  4.0),   // empty-pallet supply, pallet 1
+        make_feeder("t_empty_b",   9.0, -4.0),   // empty-pallet supply, pallet 2
+        make_dispatch("t_dispatch", 13.0, 0.0),  // full-pallet outfeed (shared)
+        // Two IDENTICAL Palletize tasks → one shared KR 120 PA arm serving
+        // two pallet positions. 50 kg forces the PA-class arm (only it has a
+        // long enough reach to actually cover a full 1.2 × 0.8 m pallet — the
+        // intra-station feasibility check enforces that); 12 s/box keeps a
+        // clean single-arm FULL with capacity to share both.
+        make_palletize("t_pal_1", 50.0, 1.2, 0.8, 24, 12.0),
+        make_palletize("t_pal_2", 50.0, 1.2, 0.8, 24, 12.0),
+        // Box flow: feeder -> each pallet task's item_in (the shared arm pick
+        // annulus).
+        make_transport("t_box_1", "t_feeder", "port", "t_pal_1", "item_in", 12.0),
+        make_transport("t_box_2", "t_feeder", "port", "t_pal_2", "item_in", 12.0),
+        // Empty-pallet flow: each pallet position fed from its own supply.
+        make_transport("t_empty_in_1", "t_empty_a", "port", "t_pal_1", "pallet_in", 120.0),
+        make_transport("t_empty_in_2", "t_empty_b", "port", "t_pal_2", "pallet_in", 120.0),
+        // Full-pallet flow: both pallet_out -> shared dispatch (target is per
+        // pallet; magical TransferStrategy beats any positive target).
+        make_transport("t_full_1", "t_pal_1", "pallet_out", "t_dispatch", "port", 240.0),
+        make_transport("t_full_2", "t_pal_2", "pallet_out", "t_dispatch", "port", 240.0),
     };
 
     // Validate workflow topology BEFORE solving (step-6 M3): catch
@@ -749,38 +794,41 @@ int main() {
         return 2;
     }
 
-    // Per-line ROW nominals (north for heavy, south for light). Used as
-    // both the placer seed and the soft positional-prior term. The
-    // collinear positional_prior() helper interpolates all tasks along one
-    // I→O axis, which would stack the two lines on the centreline; a
-    // two-row plant wants them seeded on opposite rows, so assign directly.
+    // Both Palletize tasks share one arm, so both nominals seed the SAME
+    // cell; instance_nominal averages them. Seed the arm mid-corridor between
+    // feeder and dispatch — the transport pulls (item_in toward the feeder,
+    // the two pallet ports toward their supplies + the dispatch) refine it.
     const std::map<std::string, tc::Vec2> nominal_for_task{
-        {"t_pal_heavy", tc::Vec2{8.0 * metre,  1.2 * metre}},
-        {"t_pal_light", tc::Vec2{8.0 * metre, -1.2 * metre}},
+        {"t_pal_1", tc::Vec2{6.0 * metre, 0.0 * metre}},
+        {"t_pal_2", tc::Vec2{6.0 * metre, 0.0 * metre}},
     };
 
-    // Floor: room for both rows + the arms' reach envelopes and the
-    // material-flow anchors, with margin around the dispatch/feeder.
+    // Floor: room for the PA arm's 3.2 m reach envelope + the material-flow
+    // anchors around it.
     const ts::Floor floor{
-        .x_min = -3.0 * metre, .x_max = 19.0 * metre,
-        .y_min = -8.0 * metre, .y_max = 8.0 * metre};
-    // Overlap weight is stiff (M4.2). The narrow-phase polygon overlap is a
-    // ONE-SIDED soft penalty (zero on the clear side); when the material flow
-    // pulls the two cells toward each other, a softer weight let them settle
-    // a couple of mm INTO footprint contact — a residual the strict
-    // hard_constraints check (1 µm² ≈ 1 mm depth) rightly flagged infeasible.
-    // A high weight makes the penalty bite hard enough that the cells settle
-    // just CLEAR of contact instead (solved overlap term is exactly 0). The
-    // principled fix for genuinely tight layouts — a hard LN_COBYLA
-    // inequality constraint rather than a stiff soft penalty — is a later
-    // increment (decisions.md "Floor as hard NLopt bound; overlap as soft
-    // penalty" + "Convex-polygon narrow-phase overlap (M4.2)").
+        .x_min = -3.0 * metre, .x_max = 16.0 * metre,
+        .y_min = -7.0 * metre, .y_max = 7.0 * metre};
+    // Overlap weight stays stiff (M4.2): the narrow-phase polygon overlap is
+    // a one-sided soft penalty, and a high weight keeps any inter-cell
+    // contact just-clear rather than a few mm into penetration. (This
+    // single-cell scenario has no inter-station overlap to resolve; the term
+    // is exercised by the unit tests and the prior two-cell scenario.)
     const ts::ObjectiveWeights weights{
         .overlap = 20000.0, .floor = 100.0, .positional_prior = 1.0};
 
     auto layout = build_layout_problem(
         allocation, enumeration, arms, pushers, nominal_for_task,
         floor, weights);
+
+    // Intra-station feasibility (M4 capstone): a cell whose pallets can't fit
+    // the arm's reach without colliding is not physically realizable — refuse
+    // rather than draw a fantasy layout (CLAUDE.md §1 — never fabricate past a
+    // constraint).
+    if (!layout.cell_diagnostics.empty()) {
+        std::cerr << "Intra-station layout infeasible:\n";
+        for (const auto& d : layout.cell_diagnostics) std::cerr << "  " << d << "\n";
+        return 5;
+    }
 
     auto solution = ts::solve(layout.problem);
 
@@ -811,17 +859,42 @@ int main() {
                   << (s.frozen ? "  [frozen]" : "") << "\n";
     }
 
-    // Narrow-phase payoff diagnostic (M4.2): for each pair of equipment
-    // CELLS, contrast what the bounding-CIRCLE overlap test would charge at
-    // the solved poses against the actual narrow-phase polygon overlap (~0).
-    // A large circle penalty at a feasible (polygon-clear) layout is the
-    // proof the narrow phase earns its keep: a circle test would have
-    // rejected this spacing and pushed the elongated cells ~2× farther apart.
-    std::cout << "\nNarrow-phase payoff (cell pairs):\n";
+    // Intra-station layout diagnostic (M4 capstone): how many pallet build
+    // positions each cell holds and where they landed in the station frame.
+    // A cell with >1 pallet is the dual-pallet palletizer the intra-station
+    // template laid out within the arm's reach.
+    std::cout << "\nIntra-station layout (pallets per cell):\n";
+    for (std::size_t i = 0; i < layout.problem.stations.size(); ++i) {
+        if (layout.sources[i].kind != StationSourceKind::Instance) continue;
+        const auto& zones = layout.pallet_zones_local[i];
+        std::cout << "  " << layout.problem.stations[i].id << "  "
+                  << zones.size() << " pallet zone(s)";
+        for (const auto& zone : zones) {
+            if (zone.empty()) continue;
+            // Zone centre = mean of its 4 corners (station frame).
+            double cx = 0.0, cy = 0.0;
+            for (const auto& v : zone) {
+                cx += v.x.numerical_value_in(metre);
+                cy += v.y.numerical_value_in(metre);
+            }
+            cx /= static_cast<double>(zone.size());
+            cy /= static_cast<double>(zone.size());
+            std::cout << "  [r=" << std::sqrt(cx * cx + cy * cy) << "m]";
+        }
+        std::cout << "\n";
+    }
+
+    // Narrow-phase payoff (M4.2): when there is more than one equipment cell,
+    // contrast what a bounding-CIRCLE overlap test would charge at the solved
+    // poses against the actual polygon overlap — the proof the narrow phase
+    // lets elongated cells pack tighter than a circle test would allow.
+    bool any_pair = false;
     for (std::size_t i = 0; i < layout.problem.stations.size(); ++i) {
         if (layout.sources[i].kind != StationSourceKind::Instance) continue;
         for (std::size_t j = i + 1; j < layout.problem.stations.size(); ++j) {
             if (layout.sources[j].kind != StationSourceKind::Instance) continue;
+            if (!any_pair) std::cout << "\nNarrow-phase payoff (cell pairs):\n";
+            any_pair = true;
             const auto& pi = solution.station_poses[i];
             const auto& pj = solution.station_poses[j];
             const double ri = layout.problem.stations[i].bounding_radius.numerical_value_in(metre);
@@ -839,6 +912,11 @@ int main() {
                       << "  (circles want >= " << (ri + rj)
                       << "m apart; polygons fit at " << dist << "m)\n";
         }
+    }
+    if (!any_pair) {
+        std::cout << "\nNarrow-phase payoff: single equipment cell — no "
+                     "inter-station overlap to resolve here (the narrow phase "
+                     "is exercised by the unit tests).\n";
     }
 
     // Per-transport port diagnostic: which endpoints are variable
@@ -893,7 +971,7 @@ int main() {
 
     const auto svg_path = out_dir / "layout.svg";
     draw_layout_svg(solution, layout.problem, layout.sources,
-                    allocation, arms, belts, layout.pallet_zone_local, svg_path);
+                    allocation, arms, belts, layout.pallet_zones_local, svg_path);
     std::cout << "\nWrote " << svg_path.string() << "\n";
 
     // Exit status: any unalloc was already an early-exit, here we

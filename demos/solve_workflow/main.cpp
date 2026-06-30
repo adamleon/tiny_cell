@@ -23,6 +23,11 @@
 //      - one StationProblem per BoundInstance, seeded on its line's ROW
 //        (heavy north / light south) so the two cells spread into two
 //        rows rather than crowding the feeder→dispatch centreline
+//      - each palletizer station is a MULTI-EQUIPMENT cell (step-6 M4):
+//        arm + a real pallet-zone footprint, laid out at templated
+//        station-frame offsets; the station's collision footprint is the
+//        ACCUMULATED convex hull of both (the intra-station accumulated
+//        footprint, data-model.md §3.1), buffered by clearance
 //      - one StationProblem per PinnedAnchor, frozen at its world pose
 //      - per-equipment-category DOMAIN-CREDIBLE clearance buffer
 //        (~500 mm around robots — NOT certified; standards.md is a stub)
@@ -245,6 +250,75 @@ tc::Vec2 instance_nominal(const ts::BoundInstance& bi,
     return tc::Vec2{(sx / count) * metre, (sy / count) * metre};
 }
 
+// ---- M4: multi-equipment station footprint ------------------------------
+// A station can hold MORE THAN ONE piece of equipment, laid out in its
+// station frame; the station's collision footprint is then the ACCUMULATED
+// convex hull of all of them (solver.md "Geometry flattening & caching" —
+// the intra-station accumulated footprint, data-model.md §3.1). For a
+// palletizer cell that equipment is the ARM at the station origin PLUS a
+// real PALLET ZONE — the physical pallet build position, a footprint the
+// cell must reserve as floor, not just a port at an offset (the step
+// roadmap.md M4 names as the trigger for the intra-station sub-problem).
+//
+// The intra-station layout is TEMPLATED here (fixed offsets): real
+// palletizer cells are largely templated, so the sub-problem is a fixed
+// layout, NOT an NLP (roadmap.md M4). Promoting the hardcoded template to
+// a StationTemplate type, a free intra-station solve, and the lazy
+// non-convex union + dirty-flag StationFootprint cache (data-model.md
+// §3.1) are LATER M4 increments, earned when a scenario needs them. This
+// first increment is hull-only broad-phase, built caller-side via the
+// boost adapter and passed to the solver as a plain polygon (solver/
+// depends on no foreign lib — CLAUDE.md §1 — so the hull/buffer happen
+// here, not in the placer).
+
+// Axis-aligned rectangle centred at (cx, cy), half-extents (hw, hl), CCW.
+tc::Polygon rect(double cx, double cy, double hw, double hl) {
+    return {
+        tc::Vec2{(cx - hw) * metre, (cy - hl) * metre},
+        tc::Vec2{(cx + hw) * metre, (cy - hl) * metre},
+        tc::Vec2{(cx + hw) * metre, (cy + hl) * metre},
+        tc::Vec2{(cx - hw) * metre, (cy + hl) * metre},
+    };
+}
+
+// Accumulated convex-hull footprint of several station-frame polygons:
+// collect every vertex, convex-hull them. Broad-phase only — the lazy
+// non-convex union (which would pack elongated cells tighter than the
+// hull's bounding circle allows) arrives with a narrow-phase consumer.
+tc::Polygon accumulate_hull(std::span<const tc::Polygon> parts) {
+    tc::Polygon all;
+    for (const auto& p : parts) all.insert(all.end(), p.begin(), p.end());
+    return adapters::convex_hull(all);
+}
+
+// The pallet build zone for a palletizer arm: a footprint the size of the
+// pallet plus a working margin (room for the place motion), centred at the
+// templated pallet offset (~60% of reach along +x — the same offset
+// ArmStrategy puts the pallet ports at). Station-frame.
+constexpr double kPalletWorkMargin_m = 0.25;
+tc::Polygon pallet_zone_footprint(const tc::ArmSpec& arm,
+                                  const tc::PalletizeParams& p) {
+    const double offset =
+        0.6 * arm.reach.max_radius.value().numerical_value_in(metre);
+    const double hw =
+        0.5 * p.pallet.physical.width.numerical_value_in(metre) + kPalletWorkMargin_m;
+    const double hl =
+        0.5 * p.pallet.physical.length.numerical_value_in(metre) + kPalletWorkMargin_m;
+    return rect(offset, 0.0, hw, hl);
+}
+
+// Find the PalletizeParams of a task by id (used to size a palletizer's
+// pallet zone). nullptr if the task isn't a Palletize in the enumeration.
+const tc::PalletizeParams* find_palletize_params(
+    std::span<const ts::TaskEnumeration> enumeration, const std::string& task_id) {
+    for (const auto& te : enumeration) {
+        if (te.task.id != task_id) continue;
+        if (te.task.kind() != tc::TaskKind::Palletize) return nullptr;
+        return &std::get<tc::PalletizeParams>(te.task.params);
+    }
+    return nullptr;
+}
+
 // ---- LayoutProblem construction -----------------------------------------
 
 // Source of each StationProblem in the LayoutProblem - lets the SVG
@@ -260,6 +334,10 @@ struct LayoutBuildResult {
     ts::LayoutProblem problem;
     std::vector<StationSource> sources;
     std::map<std::string, std::size_t> task_to_station;  // task_id -> station index
+    // M4: per-station pallet build zone in STATION frame (empty polygon
+    // when the station has none — anchors, pushers). Parallel to
+    // problem.stations; the SVG draws it inside the cell.
+    std::vector<tc::Polygon> pallet_zone_local;
 };
 
 // Look up the winning StrategyResult's PortConstraint for (task_id,
@@ -299,11 +377,27 @@ LayoutBuildResult build_layout_problem(
     // Instances first, then anchors.
     for (std::size_t i = 0; i < alloc.instances.size(); ++i) {
         const auto& bi = alloc.instances[i];
-        const auto fp = lookup_footprint(bi, arms, pushers);
-        // Per-category domain-credible clearance (~500 mm around robots),
-        // buffered into the footprint the placer collides against.
-        const auto buffered =
-            adapters::buffer_outward(fp, clearance_for(bi.strategy_name) * metre);
+
+        // M4: assemble the station's equipment in its station frame. A
+        // palletizer (ArmStrategy) is the arm at the origin PLUS a real
+        // pallet-zone footprint; other equipment classes are single-part.
+        std::vector<tc::Polygon> parts{lookup_footprint(bi, arms, pushers)};
+        tc::Polygon pallet_zone;  // empty unless this is a palletizer cell
+        if (bi.strategy_name == "ArmStrategy" && !bi.served.empty()) {
+            const auto* arm_spec = find_arm(arms, bi.catalog_id);
+            const auto* pp =
+                find_palletize_params(enumeration, bi.served.front().task_id);
+            if (arm_spec != nullptr && pp != nullptr) {
+                pallet_zone = pallet_zone_footprint(*arm_spec, *pp);
+                parts.push_back(pallet_zone);
+            }
+        }
+
+        // The accumulated cell footprint (hull of all equipment), buffered
+        // by the governing domain-credible clearance — the most dangerous
+        // equipment (the robot) sets the whole cell's keep-out.
+        const auto buffered = adapters::buffer_outward(
+            accumulate_hull(parts), clearance_for(bi.strategy_name) * metre);
         const double r = bounding_radius_m(buffered);
         const auto nom = instance_nominal(bi, nominal_for_task);
 
@@ -319,6 +413,7 @@ LayoutBuildResult build_layout_problem(
             .frozen = false,
         });
         result.sources.push_back({StationSourceKind::Instance, i});
+        result.pallet_zone_local.push_back(pallet_zone);
 
         const std::size_t station_idx = result.problem.stations.size() - 1;
         for (const auto& s : bi.served) {
@@ -340,6 +435,7 @@ LayoutBuildResult build_layout_problem(
             .frozen = true,
         });
         result.sources.push_back({StationSourceKind::Anchor, i});
+        result.pallet_zone_local.push_back(tc::Polygon{});  // anchors have none
         result.task_to_station[a.task_id] = result.problem.stations.size() - 1;
     }
 
@@ -398,6 +494,7 @@ void draw_layout_svg(const ts::LayoutSolution& solution,
                      const ts::AllocationResult& alloc,
                      const std::vector<tc::ArmSpec>& arms,
                      std::span<const ts::PlacedBelt> belts,
+                     const std::vector<tc::Polygon>& pallet_zones,
                      const std::filesystem::path& out_path) {
     // viewBox: floor extended by 10 % margin.
     const double xmin = problem.floor.x_min.numerical_value_in(metre);
@@ -470,24 +567,39 @@ void draw_layout_svg(const ts::LayoutSolution& solution,
             continue;
         }
 
-        // Instance: transform the buffered hull to world coords + draw.
+        // Instance: a multi-equipment palletizing CELL (M4). Draw bottom-up
+        // so the parts read as one cell: reach ring, then the accumulated
+        // buffered keep-out (the whole cell's footprint), then the reserved
+        // pallet zone, then the equipment's own base footprint on top.
         const tc::Transform2D t_world{pose.x, pose.y, pose.theta};
-        const auto world_fp = tc::apply(t_world, station.buffered_hull);
         const auto& bi = alloc.instances[source.source_index];
+        const auto* spec = (bi.strategy_name == "ArmStrategy")
+                               ? find_arm(arms, bi.catalog_id)
+                               : nullptr;
 
-        // For arms, draw reach envelope underneath the footprint.
-        if (bi.strategy_name == "ArmStrategy") {
-            const auto* spec = find_arm(arms, bi.catalog_id);
-            if (spec != nullptr) {
-                w.ring(tc::Vec2{pose.x, pose.y},
-                       spec->reach.min_radius,
-                       spec->reach.max_radius.value());
-            }
-            w.polygon(world_fp, "rgba(64,64,64,0.25)", "black", 0.04);
-        } else {
-            // Pusher: green-tinted fill.
-            w.polygon(world_fp, "rgba(0,128,0,0.20)", "rgba(0,128,0,0.80)", 0.04);
+        // Arm reach envelope (underneath everything).
+        if (spec != nullptr) {
+            w.ring(tc::Vec2{pose.x, pose.y}, spec->reach.min_radius,
+                   spec->reach.max_radius.value());
         }
+        // Accumulated cell keep-out (buffered hull of all equipment).
+        w.polygon(tc::apply(t_world, station.buffered_hull),
+                  "rgba(0,0,0,0.04)", "rgba(0,0,0,0.35)", 0.03);
+        // Reserved pallet build zone (M4 — the pallet position as floor).
+        if (!pallet_zones[i].empty()) {
+            w.polygon(tc::apply(t_world, pallet_zones[i]),
+                      "rgba(160,110,40,0.22)", "rgba(120,80,20,0.85)", 0.03);
+            w.text(tc::apply(t_world, tc::Vec2{
+                       pallet_zones[i].front().x, pallet_zones[i].front().y}),
+                   "pallet", 0.18, "rgba(90,60,15,0.95)");
+        }
+        // The equipment's own base footprint (arm plate / pusher).
+        const auto own_fp = spec != nullptr
+                                ? tc::apply(t_world, spec->footprint)
+                                : tc::apply(t_world, station.buffered_hull);
+        w.polygon(own_fp,
+                  spec != nullptr ? "rgba(64,64,64,0.55)" : "rgba(0,128,0,0.20)",
+                  spec != nullptr ? "black" : "rgba(0,128,0,0.80)", 0.04);
 
         w.text(tc::Vec2{pose.x + 0.25 * metre, pose.y + 0.35 * metre},
                station.id + ":" + bi.catalog_id, 0.25);
@@ -722,7 +834,7 @@ int main() {
 
     const auto svg_path = out_dir / "layout.svg";
     draw_layout_svg(solution, layout.problem, layout.sources,
-                    allocation, arms, belts, svg_path);
+                    allocation, arms, belts, layout.pallet_zone_local, svg_path);
     std::cout << "\nWrote " << svg_path.string() << "\n";
 
     // Exit status: any unalloc was already an early-exit, here we

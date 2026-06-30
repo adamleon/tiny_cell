@@ -174,6 +174,36 @@ TEST(TransportPenalty, RespectsStationRotation) {
 
 // ---- evaluate_objective + hard_constraints_satisfied ---------------------
 
+// ---- annulus_penalty (step-6 M1.3) --------------------------------------
+
+TEST(AnnulusPenalty, ZeroInsideBand) {
+    // Port at radius 1.5, band [1.0, 2.0] -> inside -> zero.
+    tc::Vec2 port{1.5 * metre, 0.0 * metre};
+    EXPECT_NEAR(ts::annulus_penalty(port, 1.0 * metre, 2.0 * metre), 0.0, 1e-12);
+}
+
+TEST(AnnulusPenalty, ZeroAtBandBoundaries) {
+    tc::Vec2 inner{1.0 * metre, 0.0 * metre};  // r == reach_min
+    tc::Vec2 outer{0.0 * metre, 2.0 * metre};  // r == reach_max
+    EXPECT_NEAR(ts::annulus_penalty(inner, 1.0 * metre, 2.0 * metre), 0.0, 1e-12);
+    EXPECT_NEAR(ts::annulus_penalty(outer, 1.0 * metre, 2.0 * metre), 0.0, 1e-12);
+}
+
+TEST(AnnulusPenalty, QuadraticBelowMinAndAboveMax) {
+    tc::Vec2 below{0.5 * metre, 0.0 * metre};  // r 0.5 < min 1.0 -> (1.0-0.5)^2
+    EXPECT_NEAR(ts::annulus_penalty(below, 1.0 * metre, 2.0 * metre), 0.25, 1e-12);
+    tc::Vec2 above{0.0 * metre, 3.0 * metre};  // r 3.0 > max 2.0 -> (3.0-2.0)^2
+    EXPECT_NEAR(ts::annulus_penalty(above, 1.0 * metre, 2.0 * metre), 1.0, 1e-12);
+}
+
+TEST(AnnulusPenalty, UsesEuclideanRadiusNotComponents) {
+    // Port at (3, 4) -> radius 5; band [1, 2] -> (5-2)^2 = 9.
+    tc::Vec2 port{3.0 * metre, 4.0 * metre};
+    EXPECT_NEAR(ts::annulus_penalty(port, 1.0 * metre, 2.0 * metre), 9.0, 1e-12);
+}
+
+// ---- evaluate / decompose -----------------------------------------------
+
 TEST(EvaluateObjective, RejectsPoseCountMismatch) {
     ts::LayoutProblem p{
         .stations = {make_station("a", 0, 0, 1)},
@@ -309,6 +339,39 @@ TEST(DecomposeObjective, FieldsSumToTotalAndMatchEvaluate) {
     EXPECT_NEAR(b.prior, 2.0 * (1.0 + 1.0), 1e-9);         // 1 m off each, sum × weight 2
     EXPECT_NEAR(b.transport, 5.0 * 1.0, 1e-9);             // dist² 1 × weight 5
     EXPECT_NEAR(b.total, b.overlap + b.floor + b.prior + b.transport, 1e-9);
+    EXPECT_NEAR(b.total, ts::evaluate_objective(p, poses), 1e-9);
+}
+
+TEST(DecomposeObjective, IncludesAnnulusTermForAnnulusEndpoints) {
+    // One transport whose SOURCE endpoint is an annulus port placed outside
+    // its band; SINK is a plain point. The annulus term is the squared
+    // radial violation times the annulus weight, and total includes it.
+    std::vector<tc::Pose2D> poses{pose_at(0.0, 0.0), pose_at(0.0, 0.0)};
+    ts::LayoutProblem p{
+        .stations = {make_station("s0", 0.0, 0.0, 0.0),
+                     make_station("s1", 0.0, 0.0, 0.0)},
+        .transports = {
+            ts::TransportConstraint{
+                .source_station = 0,
+                .source_port_local = tc::Vec2{3.0 * metre, 0.0 * metre},  // r = 3
+                .sink_station = 1,
+                .sink_port_local = tc::Vec2{0.0 * metre, 0.0 * metre},
+                .source_reach_min = 0.5 * metre,
+                .source_reach_max = 2.0 * metre,  // r 3 > 2 -> (3-2)^2 = 1
+            },
+        },
+        .floor = ts::Floor{
+            .x_min = -100.0 * metre, .x_max = 100.0 * metre,
+            .y_min = -100.0 * metre, .y_max = 100.0 * metre,
+        },
+        .weights = ts::ObjectiveWeights{
+            .annulus = 4.0, .overlap = 0.0, .floor = 0.0,
+            .positional_prior = 0.0, .transport = 0.0,
+        },
+    };
+    auto b = ts::decompose_objective(p, poses);
+    EXPECT_NEAR(b.annulus, 4.0 * 1.0, 1e-9);  // weight 4 x violation 1
+    EXPECT_NEAR(b.total, b.overlap + b.floor + b.prior + b.transport + b.annulus, 1e-9);
     EXPECT_NEAR(b.total, ts::evaluate_objective(p, poses), 1e-9);
 }
 

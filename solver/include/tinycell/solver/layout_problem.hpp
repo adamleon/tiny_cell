@@ -30,6 +30,7 @@
 // function of placed distance (needs the motion model coupled to
 // actual poses); blueprint obstacles; narrow-phase polygon union.
 
+#include <optional>
 #include <string>
 #include <tinycell/geometry.hpp>
 #include <tinycell/units.hpp>
@@ -93,12 +94,24 @@ struct TransportConstraint {
     core::Vec2 source_port_local;     // in source station's frame
     std::size_t sink_station;
     core::Vec2 sink_port_local;       // in sink station's frame
+
+    // Reach-annulus band for each endpoint (step-6 M1.3), copied from the
+    // emitting PortConstraint at problem-build time so the kernel reads it
+    // flat (no PortConstraint lookup mid-solve, CLAUDE.md s3). An endpoint
+    // with reach_max set is an ANNULUS port: its port-local position should
+    // lie within [reach_min, reach_max] of its station origin, enforced by
+    // the soft annulus_penalty. Unset => POINT endpoint, no annulus term.
+    std::optional<core::Length> source_reach_min;
+    std::optional<core::Length> source_reach_max;
+    std::optional<core::Length> sink_reach_min;
+    std::optional<core::Length> sink_reach_max;
 };
 
 // Soft objective weights. Defaults are reasonable MVP starting points;
 // callers should expect to tune them once the placer is wired (Phase
 // E) and behaviour can be observed on real workloads.
 struct ObjectiveWeights {
+    double annulus = 1.0;            // penalty per m^2 of reach-band radial violation (M1.3)
     double overlap = 100.0;          // penalty per metre² of bounding-circle interpenetration
     double floor = 100.0;            // penalty per metre² of out-of-floor extent
     double positional_prior = 1.0;   // penalty per metre² of deviation from nominal
@@ -125,6 +138,7 @@ struct ObjectiveBreakdown {
     double floor = 0.0;
     double prior = 0.0;
     double transport = 0.0;
+    double annulus = 0.0;
     double total = 0.0;
 };
 

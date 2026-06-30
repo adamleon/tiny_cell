@@ -48,6 +48,18 @@ double transport_penalty(const core::Pose2D& pose_src,
                          const core::Pose2D& pose_sink,
                          const core::Vec2& port_sink_local);
 
+// Reach-annulus soft term (step-6 M1.3): an annulus port's port-local
+// position should lie within [reach_min, reach_max] of its station
+// origin. Zero inside the band; grows quadratically with the radial
+// violation outside it (r < reach_min or r > reach_max). port_local is
+// in the station frame, so this term is invariant to the station's world
+// pose - it constrains only where the port sits relative to its own
+// equipment. A soft preferred-radius pull toward the band midpoint is a
+// deferred refinement; the crude band-only form is enough to make an
+// annulus port land inside reach.
+double annulus_penalty(const core::Vec2& port_local,
+                       core::Length reach_min, core::Length reach_max);
+
 // Sum the four terms across the whole problem, weighted by
 // problem.weights. Pose count must match problem.stations.size();
 // throws std::invalid_argument otherwise. The pair-wise overlap

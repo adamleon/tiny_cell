@@ -74,6 +74,20 @@ double transport_penalty(const tc::Pose2D& pose_src,
     return dx * dx + dy * dy;
 }
 
+double annulus_penalty(const tc::Vec2& port_local,
+                       tc::Length reach_min, tc::Length reach_max) {
+    // Radial distance of the port from its station origin, in the station
+    // frame (invariant to the station's world pose).
+    const double x = port_local.x.numerical_value_in(si::metre);
+    const double y = port_local.y.numerical_value_in(si::metre);
+    const double r = std::sqrt(x * x + y * y);
+    const double rmin = reach_min.numerical_value_in(si::metre);
+    const double rmax = reach_max.numerical_value_in(si::metre);
+    if (r < rmin) return sq(rmin - r);
+    if (r > rmax) return sq(r - rmax);
+    return 0.0;
+}
+
 ObjectiveBreakdown decompose_objective(const LayoutProblem& problem,
                                        const std::vector<tc::Pose2D>& poses) {
     if (poses.size() != problem.stations.size()) {
@@ -103,8 +117,21 @@ ObjectiveBreakdown decompose_objective(const LayoutProblem& problem,
         b.transport += w.transport * transport_penalty(
             poses[tr.source_station], tr.source_port_local,
             poses[tr.sink_station],   tr.sink_port_local);
+        // Annulus term for any endpoint that is a reach-annulus port
+        // (reach_max set). reach_min defaults to 0 (a disc) when only
+        // reach_max is given.
+        if (tr.source_reach_max.has_value()) {
+            const tc::Length rmin = tr.source_reach_min.value_or(0.0 * si::metre);
+            b.annulus += w.annulus *
+                         annulus_penalty(tr.source_port_local, rmin, *tr.source_reach_max);
+        }
+        if (tr.sink_reach_max.has_value()) {
+            const tc::Length rmin = tr.sink_reach_min.value_or(0.0 * si::metre);
+            b.annulus += w.annulus *
+                         annulus_penalty(tr.sink_port_local, rmin, *tr.sink_reach_max);
+        }
     }
-    b.total = b.overlap + b.floor + b.prior + b.transport;
+    b.total = b.overlap + b.floor + b.prior + b.transport + b.annulus;
     return b;
 }
 

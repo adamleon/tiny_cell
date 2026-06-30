@@ -1,46 +1,43 @@
-// INTENT: end-to-end Layer-3 placement (Phase G of step 5). Runs the
-// full pipeline on the same workflow the transport_workflow demo
-// uses — feeder Anchor + three Palletize tasks + three Transport
-// edges — then:
+// INTENT: step-6 M3 — the realistic palletizer scenario, the MVP go/no-go
+// (roadmap.md step-6 M3). A recognisable TWO-LINE palletizing PLANT: one
+// shared box infeed feeds two robot palletizing cells — a HEAVY-product
+// line (large arm) and a LIGHT-product line (small arm) — each with its
+// own empty-pallet supply and a shared full-pallet dispatch. The two lines
+// bind to DIFFERENT arms (different payloads → different catalog ids → the
+// allocator never collapses them), and their targets are generous enough
+// that each is a clean single-arm FULL (no PARTIAL chaining, so no orphan
+// residual arm — the artefact the old crammed 3-task scenario produced).
 //
-//   1. enumerate(workflow, strategies)          (steps 1-3, T.7)
-//   2. allocate(enumeration)                    (step 4 + T.5)
-//   3. positional_prior over palletize tasks    (Phase C)
+// This demo IS the scenario: a robotic palletizing plant, so the strategy
+// set is arm + transfer + anchor (PusherStrategy is deliberately omitted —
+// arm-vs-pusher OR-tree competition is exercised in the brute_force /
+// layer_2 demos; here every cell is a robot).
+//
+// Pipeline:
+//   1. validate_workflow(workflow)              (step-6 M3, net-new)
+//      — port-mismatch / unconnected-input topology check; refuse to
+//        solve on any Error (e.g. a pallet_in with no empty-pallet feed).
+//   2. enumerate(workflow, strategies)          (steps 1-3, T.7)
+//   3. allocate(enumeration)                    (step 4 + T.5)
 //   4. build a LayoutProblem from the allocation
-//      - one StationProblem per BoundInstance, seeded at the centroid
-//        of its served palletize tasks' nominal positions
+//      - one StationProblem per BoundInstance, seeded on its line's ROW
+//        (heavy north / light south) so the two cells spread into two
+//        rows rather than crowding the feeder→dispatch centreline
 //      - one StationProblem per PinnedAnchor, frozen at its world pose
-//   5. solve(layout_problem)                    (Phase D + E + F)
-//   6. route_belts(...) — turn each resolved transport into a real
-//      placed conveyor (step-6 M2): cheapest catalog belt covering the
-//      routed distance, belt-vs-station collision flagged
+//      - per-equipment-category DOMAIN-CREDIBLE clearance buffer
+//        (~500 mm around robots — NOT certified; standards.md is a stub)
+//   5. solve(layout_problem)                    (Phase D + E + F + M1)
+//   6. route_belts(...)                         (step-6 M2)
 //   7. write a world-coords SVG of the solved layout + belts
 //
-// Success: writes <build>/demos/solve_workflow/output/layout.svg
-// containing the floor outline, every station's footprint at its
-// SOLVED pose (with arm reach envelopes overlaid), the feeder anchor
-// marker, a real belt footprint per Transport edge (a width-wide
-// conveyor between the SOLVED port positions, red if it collides with a
-// station), and a filled dot at each variable reach-annulus port
-// (item_in) showing where the placer put it inside the arm's reach
-// band. Exits 0 if no station is unallocated and
-// hard_constraints_satisfied is true; non-zero with a diagnostic
-// message otherwise. (Belt collisions/unfitted spans are REPORTED, not
-// failures — sequential placement, joint placement deferred.)
-//
-// What the SVG shows that the hand-rolled layer_3_placement demo
-// could not:
-//   - Stations placed by an actual solver, not at idx*pitch along x.
-//   - Anchors held in place (frozen=true) and contributing to the
-//     overlap field that pushes nearby stations away.
-//   - Transport edges visualized in world coords - the topology made
-//     spatial.
-//   - item_in as a VARIABLE reach-annulus port (step-6 M1): the placer
-//     slides it within the arm's reach band toward what it exchanges
-//     items with, and the marker lands off-origin inside the ring.
-//   - Transports as REAL belts (step-6 M2): each edge is a placed
-//     conveyor with a catalog width + length and a footprint that
-//     participates in belt-vs-station collision checking.
+// Success / go-no-go: writes <build>/demos/solve_workflow/output/layout.svg
+// that a person recognises as a two-line palletizing plant — two robot
+// cells (footprint + reach ring), box/empty-pallet/full-pallet belts
+// routing CLEAR of stations (the 2D-spacing test the old collinear
+// scenario failed). Exits 0 iff the workflow validates, nothing is
+// unallocated, and hard_constraints_satisfied is true; non-zero with a
+// diagnostic otherwise. Belt collisions / unfitted spans are REPORTED,
+// not failures (sequential placement; joint placement deferred).
 
 #include <algorithm>
 #include <cmath>
@@ -67,9 +64,8 @@
 #include <tinycell/solver/belt_routing.hpp>
 #include <tinycell/solver/enumerator.hpp>
 #include <tinycell/solver/layout_problem.hpp>
-#include <tinycell/solver/positional_prior.hpp>
-#include <tinycell/solver/pusher_strategy.hpp>
 #include <tinycell/solver/transfer_strategy.hpp>
+#include <tinycell/solver/workflow_validation.hpp>
 #include <tinycell/svg.hpp>
 
 namespace {
@@ -186,6 +182,22 @@ double bounding_radius_m(const tc::Polygon& p) {
     return std::sqrt(r2_max);
 }
 
+// Domain-credible (NOT certified) safety clearance per equipment
+// category, in metres. ~500 mm of safeguarded space around an industrial
+// robot reflects common ISO 10218-2 / ISO 13857 cell-integration practice,
+// but these are ENGINEERING PLACEHOLDERS pending a safety engineer —
+// standards.md is a stub and CLAUDE.md §5 forbids inventing certified
+// numbers. They feed the existing buffer_outward pipeline, so real
+// per-rule values swap in later without structural change (step-6 M3
+// lands the credible magnitude; certification is downstream). Buffered
+// into the station footprint that inter-station overlap and belt-vs-
+// station collision read.
+double clearance_for(const std::string& strategy_name) {
+    if (strategy_name == "ArmStrategy")    return 0.50;  // robot safeguarded space
+    if (strategy_name == "PusherStrategy") return 0.30;  // guarded linear actuator
+    return 0.30;                                          // conservative default
+}
+
 // Look up the catalog footprint for a bound instance. Branches on
 // strategy_name to pick the right catalog.
 tc::Polygon lookup_footprint(const ts::BoundInstance& bi,
@@ -278,8 +290,7 @@ LayoutBuildResult build_layout_problem(
     const std::vector<tc::PusherSpec>& pushers,
     const std::map<std::string, tc::Vec2>& nominal_for_task,
     const ts::Floor& floor,
-    const ts::ObjectiveWeights& weights,
-    double clearance_m)
+    const ts::ObjectiveWeights& weights)
 {
     LayoutBuildResult result;
     result.problem.floor = floor;
@@ -289,7 +300,10 @@ LayoutBuildResult build_layout_problem(
     for (std::size_t i = 0; i < alloc.instances.size(); ++i) {
         const auto& bi = alloc.instances[i];
         const auto fp = lookup_footprint(bi, arms, pushers);
-        const auto buffered = adapters::buffer_outward(fp, clearance_m * metre);
+        // Per-category domain-credible clearance (~500 mm around robots),
+        // buffered into the footprint the placer collides against.
+        const auto buffered =
+            adapters::buffer_outward(fp, clearance_for(bi.strategy_name) * metre);
         const double r = bounding_radius_m(buffered);
         const auto nom = instance_nominal(bi, nominal_for_task);
 
@@ -442,9 +456,15 @@ void draw_layout_svg(const ts::LayoutSolution& solution,
         const auto& source = sources[i];
 
         if (source.kind == StationSourceKind::Anchor) {
-            // Anchor marker: filled green circle.
+            // Anchor marker, coloured by material-flow role so the cell
+            // reads at a glance: SOURCE anchors (Output — box feeder,
+            // empty-pallet supply) green; SINK anchors (Input — dispatch)
+            // amber. Both filled circles.
+            const bool is_sink =
+                alloc.anchors[source.source_index].role == tc::PortDirection::Input;
             w.circle(tc::Vec2{pose.x, pose.y}, 0.25 * metre,
-                     "rgba(0,160,0,0.80)", "rgba(0,80,0,1.0)", 0.04);
+                     is_sink ? "rgba(230,140,0,0.85)" : "rgba(0,160,0,0.80)",
+                     is_sink ? "rgba(150,90,0,1.0)" : "rgba(0,80,0,1.0)", 0.04);
             w.text(tc::Vec2{pose.x + 0.30 * metre, pose.y + 0.30 * metre},
                    station.id, 0.30);
             continue;
@@ -526,34 +546,68 @@ int main() {
     const auto belt_catalog = io::load_belt_catalog(
         repo / "assets" / "belt" / "generic" / "catalog.json");
 
+    // Robotic palletizing PLANT: arm + transfer + anchor only. Pusher is
+    // deliberately omitted (this scenario is two robot cells; arm-vs-pusher
+    // OR-tree competition lives in the brute_force / layer_2 demos). The
+    // pusher CATALOG is still loaded — lookup_footprint stays general — it
+    // just has no instances here.
     ts::ArmStrategy arm_strategy(arms);
-    ts::PusherStrategy pusher_strategy(pushers);
     ts::TransferStrategy transfer_strategy;
     ts::AnchorStrategy anchor_strategy;
     const std::vector<const ts::Strategy*> strategies{
-        &arm_strategy, &pusher_strategy, &transfer_strategy, &anchor_strategy};
+        &arm_strategy, &transfer_strategy, &anchor_strategy};
 
+    // ---- the scenario: a two-line palletizing plant -------------------
+    // One shared box infeed (feeder) splits to two robot cells:
+    //   * HEAVY line (north): 25 kg cases onto a 1.2 x 1.0 m pallet —
+    //     payload forces a large arm (KUKA KR 30, 2.1 m reach).
+    //   * LIGHT line (south): 5 kg cartons onto a 1.2 x 0.8 m pallet —
+    //     a small arm (KUKA KR 6, 0.9 m reach) suffices.
+    // Different payloads → different catalog ids → the allocator binds two
+    // distinct arms (never collapses them). Generous per-box targets
+    // (8 s / 6 s — ~7-10 boxes/min, realistic palletizing rates) keep each
+    // a clean single-arm FULL: no PARTIAL, hence no orphan residual arm.
+    // Each cell has its own empty-pallet supply (north/south, which also
+    // pulls the two arms apart into two rows) and both ship to one shared
+    // dispatch. Anchor world poses lay the material flow out as two rows.
     const std::vector<tc::Task> workflow{
-        // Anchors: feeder pinned at world origin, dispatch pinned at
-        // (20, 0). The prior pinning matches the workflow geometry.
-        make_feeder("t_feeder",     0.0,  0.0),
-        make_dispatch("t_dispatch", 20.0, 0.0),
-        // Palletize tasks.
-        make_palletize("t_pallet_a",     5.0, 1.2, 0.8, 24, 5.0),
-        make_palletize("t_pallet_b",     5.0, 1.2, 0.8, 24, 5.0),
-        make_palletize("t_pallet_tight", 8.0, 2.0, 2.0, 12, 2.0),
-        // Item flow: feeder -> each palletize's item_in.
-        make_transport("t_xport_in_a",     "t_feeder", "port", "t_pallet_a",     "item_in", 5.0),
-        make_transport("t_xport_in_b",     "t_feeder", "port", "t_pallet_b",     "item_in", 5.0),
-        make_transport("t_xport_in_tight", "t_feeder", "port", "t_pallet_tight", "item_in", 2.0),
-        // Pallet flow: each palletize's pallet_out -> dispatch.
-        // target_ct_per_item is per pallet here (= cycle_time of the
-        // palletize task); magical TransferStrategy beats any positive
-        // target, so the value just needs to be > 0.
-        make_transport("t_xport_out_a",     "t_pallet_a",     "pallet_out", "t_dispatch", "port", 120.0),
-        make_transport("t_xport_out_b",     "t_pallet_b",     "pallet_out", "t_dispatch", "port", 120.0),
-        make_transport("t_xport_out_tight", "t_pallet_tight", "pallet_out", "t_dispatch", "port",  24.0),
+        // Anchors (frozen world poses).
+        make_feeder("t_feeder",    0.0,  0.0),   // box infeed (shared)
+        make_feeder("t_empty_n",   9.0,  6.0),   // empty-pallet supply, north line
+        make_feeder("t_empty_s",   9.0, -6.0),   // empty-pallet supply, south line
+        make_dispatch("t_dispatch", 16.0, 0.0),  // full-pallet outfeed (shared)
+        // Palletize tasks (the two robot cells).
+        make_palletize("t_pal_heavy", 25.0, 1.2, 1.0, 16, 8.0),  // north
+        make_palletize("t_pal_light",  5.0, 1.2, 0.8, 30, 6.0),  // south
+        // Box flow: shared feeder -> each cell's item_in (reach annulus).
+        make_transport("t_box_heavy", "t_feeder", "port", "t_pal_heavy", "item_in", 8.0),
+        make_transport("t_box_light", "t_feeder", "port", "t_pal_light", "item_in", 6.0),
+        // Empty-pallet flow: each line's supply -> its pallet_in.
+        make_transport("t_empty_in_heavy", "t_empty_n", "port", "t_pal_heavy", "pallet_in", 60.0),
+        make_transport("t_empty_in_light", "t_empty_s", "port", "t_pal_light", "pallet_in", 60.0),
+        // Full-pallet flow: each line's pallet_out -> shared dispatch.
+        // target is per pallet; magical TransferStrategy beats any
+        // positive target, so the value just needs to be > 0.
+        make_transport("t_full_heavy", "t_pal_heavy", "pallet_out", "t_dispatch", "port", 120.0),
+        make_transport("t_full_light", "t_pal_light", "pallet_out", "t_dispatch", "port", 120.0),
     };
+
+    // Validate workflow topology BEFORE solving (step-6 M3): catch
+    // port-mismatch / unconnected-input gaps early with an actionable
+    // diagnostic instead of silently producing a layout with missing
+    // material edges. Errors block the solve; warnings are advisory.
+    const auto validation = ts::validate_workflow(workflow);
+    for (const auto& issue : validation.issues) {
+        std::cerr << (issue.severity == ts::WorkflowIssueSeverity::Error
+                          ? "  workflow ERROR: "
+                          : "  workflow warning: ")
+                  << issue.message << "\n";
+    }
+    if (!validation.ok()) {
+        std::cerr << "Workflow validation failed ("
+                  << validation.error_count() << " error(s)); refusing to solve.\n";
+        return 4;
+    }
 
     const auto enumeration = ts::enumerate(workflow, strategies);
     const auto allocation = ts::allocate(enumeration);
@@ -565,32 +619,27 @@ int main() {
         return 2;
     }
 
-    // Positional prior over the PALLETIZE tasks only (Anchors are
-    // pinned; Transports are edges). Input anchor = feeder; output
-    // anchor at (20, 0) - notional dispatch point used only as the
-    // prior's pinning, not a workflow task at MVP.
-    std::vector<tc::Task> palletize_only;
-    for (const auto& t : workflow) {
-        if (t.kind() == tc::TaskKind::Palletize) palletize_only.push_back(t);
-    }
-    const auto prior = ts::positional_prior(palletize_only,
-        tc::Vec2{0.0 * metre, 0.0 * metre},
-        tc::Vec2{20.0 * metre, 0.0 * metre});
-    std::map<std::string, tc::Vec2> nominal_for_task;
-    for (const auto& e : prior.entries) nominal_for_task[e.task_id] = e.nominal;
+    // Per-line ROW nominals (north for heavy, south for light). Used as
+    // both the placer seed and the soft positional-prior term. The
+    // collinear positional_prior() helper interpolates all tasks along one
+    // I→O axis, which would stack the two lines on the centreline; a
+    // two-row plant wants them seeded on opposite rows, so assign directly.
+    const std::map<std::string, tc::Vec2> nominal_for_task{
+        {"t_pal_heavy", tc::Vec2{8.0 * metre,  3.5 * metre}},
+        {"t_pal_light", tc::Vec2{8.0 * metre, -3.5 * metre}},
+    };
 
-    // Floor: enough room for the palletizer arms (3.2 m reach) at the
-    // far end without colliding with the feeder at world origin.
+    // Floor: room for both rows + the arms' reach envelopes and the
+    // material-flow anchors, with margin around the dispatch/feeder.
     const ts::Floor floor{
-        .x_min = -5.0 * metre, .x_max = 25.0 * metre,
-        .y_min = -10.0 * metre, .y_max = 10.0 * metre};
+        .x_min = -3.0 * metre, .x_max = 19.0 * metre,
+        .y_min = -8.0 * metre, .y_max = 8.0 * metre};
     const ts::ObjectiveWeights weights{
         .overlap = 1000.0, .floor = 100.0, .positional_prior = 1.0};
-    constexpr double kClearance_m = 0.2;   // placeholder, standards.md is a stub
 
     auto layout = build_layout_problem(
         allocation, enumeration, arms, pushers, nominal_for_task,
-        floor, weights, kClearance_m);
+        floor, weights);
 
     auto solution = ts::solve(layout.problem);
 

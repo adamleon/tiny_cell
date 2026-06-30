@@ -162,3 +162,12 @@ target_link_libraries(test_belt_routing PRIVATE
     GTest::gtest_main
 )
 add_test(NAME test_belt_routing COMMAND test_belt_routing)
+
+add_executable(test_workflow_validation test_workflow_validation.cpp)
+target_link_libraries(test_workflow_validation PRIVATE
+    TinyCell::core
+    TinyCell::solver
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_workflow_validation COMMAND test_workflow_validation)

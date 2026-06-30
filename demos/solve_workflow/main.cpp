@@ -68,6 +68,7 @@
 #include <tinycell/solver/arm_strategy.hpp>
 #include <tinycell/solver/belt_routing.hpp>
 #include <tinycell/solver/enumerator.hpp>
+#include <tinycell/solver/layout_objective.hpp>
 #include <tinycell/solver/layout_problem.hpp>
 #include <tinycell/solver/transfer_strategy.hpp>
 #include <tinycell/solver/workflow_validation.hpp>
@@ -262,14 +263,17 @@ tc::Vec2 instance_nominal(const ts::BoundInstance& bi,
 //
 // The intra-station layout is TEMPLATED here (fixed offsets): real
 // palletizer cells are largely templated, so the sub-problem is a fixed
-// layout, NOT an NLP (roadmap.md M4). Promoting the hardcoded template to
-// a StationTemplate type, a free intra-station solve, and the lazy
-// non-convex union + dirty-flag StationFootprint cache (data-model.md
-// §3.1) are LATER M4 increments, earned when a scenario needs them. This
-// first increment is hull-only broad-phase, built caller-side via the
-// boost adapter and passed to the solver as a plain polygon (solver/
-// depends on no foreign lib — CLAUDE.md §1 — so the hull/buffer happen
-// here, not in the placer).
+// layout, NOT an NLP (roadmap.md M4). The accumulated CONVEX hull is the
+// cell footprint; it now feeds both the inter-station bounding-circle broad
+// phase AND the M4.2 SAT narrow phase (overlap_penalty_poly), built
+// caller-side via the boost adapter and passed to the solver as a plain
+// polygon (solver/ depends on no foreign lib — CLAUDE.md §1 — so the
+// hull/buffer happen here, not in the placer). LATER M4 increments, each
+// earned when a scenario needs it: promoting the hardcoded template to a
+// StationTemplate type, a free intra-station solve, and the lazy
+// NON-CONVEX union + dirty-flag StationFootprint cache (data-model.md §3.1)
+// that would let elongated cells NEST into each other's concavities (which
+// the convex hull over-covers).
 
 // Axis-aligned rectangle centred at (cx, cy), half-extents (hw, hl), CCW.
 tc::Polygon rect(double cx, double cy, double hw, double hl) {
@@ -282,9 +286,12 @@ tc::Polygon rect(double cx, double cy, double hw, double hl) {
 }
 
 // Accumulated convex-hull footprint of several station-frame polygons:
-// collect every vertex, convex-hull them. Broad-phase only — the lazy
-// non-convex union (which would pack elongated cells tighter than the
-// hull's bounding circle allows) arrives with a narrow-phase consumer.
+// collect every vertex, convex-hull them. The result feeds both the
+// inter-station bounding-circle broad phase and the M4.2 SAT narrow phase
+// (overlap_penalty_poly). The tighter NON-convex union — which would let
+// elongated cells nest into each other's concavities that this convex hull
+// over-covers — is the deferred next step (data-model.md §3.1), needing the
+// cell kept non-convex (→ boost → caller-side).
 tc::Polygon accumulate_hull(std::span<const tc::Polygon> parts) {
     tc::Polygon all;
     for (const auto& p : parts) all.insert(all.end(), p.begin(), p.end());
@@ -593,13 +600,15 @@ void draw_layout_svg(const ts::LayoutSolution& solution,
                        pallet_zones[i].front().x, pallet_zones[i].front().y}),
                    "pallet", 0.18, "rgba(90,60,15,0.95)");
         }
-        // The equipment's own base footprint (arm plate / pusher).
-        const auto own_fp = spec != nullptr
-                                ? tc::apply(t_world, spec->footprint)
-                                : tc::apply(t_world, station.buffered_hull);
-        w.polygon(own_fp,
-                  spec != nullptr ? "rgba(64,64,64,0.55)" : "rgba(0,128,0,0.20)",
-                  spec != nullptr ? "black" : "rgba(0,128,0,0.80)", 0.04);
+        // The arm's own base plate, drawn on top so the robot base reads
+        // distinctly from the accumulated cell keep-out. (A pusher cell —
+        // none in this scenario — has no pallet zone, so its keep-out hull
+        // above already IS its footprint; it gets no separate base layer,
+        // rather than double-drawing the same buffered polygon.)
+        if (spec != nullptr) {
+            w.polygon(tc::apply(t_world, spec->footprint),
+                      "rgba(64,64,64,0.55)", "black", 0.04);
+        }
 
         w.text(tc::Vec2{pose.x + 0.25 * metre, pose.y + 0.35 * metre},
                station.id + ":" + bi.catalog_id, 0.25);
@@ -685,10 +694,14 @@ int main() {
     const std::vector<tc::Task> workflow{
         // Anchors (frozen world poses). The empty-pallet supplies sit only
         // modestly off the centreline (±3 m) and the cells are seeded close
-        // (±1.2 m, below) — so the two lines WANT to crowd the
-        // feeder→dispatch corridor, and what holds them apart is their
-        // accumulated CELL FOOTPRINT (M4.2 narrow phase), not their
-        // conservative bounding circles. They settle at footprint contact.
+        // to it (±1.2 m, below) — so the material flow draws the two lines
+        // into the feeder→dispatch corridor and they settle ~2.4 m apart,
+        // just clear of footprint contact. The point of the M4.2 narrow phase
+        // is that this spacing is PERMITTED at all: the cells are elongated
+        // (arm + offset pallet zone), so a bounding-CIRCLE overlap test would
+        // spuriously force them ~2× farther apart (their circles overlap at
+        // 2.4 m even though their footprints don't). The demo prints that
+        // circle-vs-polygon contrast after solving.
         make_feeder("t_feeder",    0.0,  0.0),   // box infeed (shared)
         make_feeder("t_empty_n",  10.0,  3.0),   // empty-pallet supply, north line
         make_feeder("t_empty_s",  10.0, -3.0),   // empty-pallet supply, south line
@@ -751,13 +764,17 @@ int main() {
     const ts::Floor floor{
         .x_min = -3.0 * metre, .x_max = 19.0 * metre,
         .y_min = -8.0 * metre, .y_max = 8.0 * metre};
-    // Overlap weight is stiff (M4.2): with the narrow-phase polygon term the
-    // two cells pack to FOOTPRINT contact, where the soft penalty balances
-    // against the transport pull toward the shared dispatch. A high weight
-    // keeps that equilibrium residual sub-millimetre so the strict
-    // hard_constraints check still passes (the principled fix for tight
-    // layouts — a hard COBYLA inequality constraint — is a later increment;
-    // decisions.md "Floor as hard NLopt bound; overlap as soft penalty").
+    // Overlap weight is stiff (M4.2). The narrow-phase polygon overlap is a
+    // ONE-SIDED soft penalty (zero on the clear side); when the material flow
+    // pulls the two cells toward each other, a softer weight let them settle
+    // a couple of mm INTO footprint contact — a residual the strict
+    // hard_constraints check (1 µm² ≈ 1 mm depth) rightly flagged infeasible.
+    // A high weight makes the penalty bite hard enough that the cells settle
+    // just CLEAR of contact instead (solved overlap term is exactly 0). The
+    // principled fix for genuinely tight layouts — a hard LN_COBYLA
+    // inequality constraint rather than a stiff soft penalty — is a later
+    // increment (decisions.md "Floor as hard NLopt bound; overlap as soft
+    // penalty" + "Convex-polygon narrow-phase overlap (M4.2)").
     const ts::ObjectiveWeights weights{
         .overlap = 20000.0, .floor = 100.0, .positional_prior = 1.0};
 
@@ -792,6 +809,36 @@ int main() {
                   << "  nominal=(" << s.nominal.x.numerical_value_in(metre)
                   << ", " << s.nominal.y.numerical_value_in(metre) << ")"
                   << (s.frozen ? "  [frozen]" : "") << "\n";
+    }
+
+    // Narrow-phase payoff diagnostic (M4.2): for each pair of equipment
+    // CELLS, contrast what the bounding-CIRCLE overlap test would charge at
+    // the solved poses against the actual narrow-phase polygon overlap (~0).
+    // A large circle penalty at a feasible (polygon-clear) layout is the
+    // proof the narrow phase earns its keep: a circle test would have
+    // rejected this spacing and pushed the elongated cells ~2× farther apart.
+    std::cout << "\nNarrow-phase payoff (cell pairs):\n";
+    for (std::size_t i = 0; i < layout.problem.stations.size(); ++i) {
+        if (layout.sources[i].kind != StationSourceKind::Instance) continue;
+        for (std::size_t j = i + 1; j < layout.problem.stations.size(); ++j) {
+            if (layout.sources[j].kind != StationSourceKind::Instance) continue;
+            const auto& pi = solution.station_poses[i];
+            const auto& pj = solution.station_poses[j];
+            const double ri = layout.problem.stations[i].bounding_radius.numerical_value_in(metre);
+            const double rj = layout.problem.stations[j].bounding_radius.numerical_value_in(metre);
+            const double dx = (pi.x - pj.x).numerical_value_in(metre);
+            const double dy = (pi.y - pj.y).numerical_value_in(metre);
+            const double dist = std::sqrt(dx * dx + dy * dy);
+            const double circle = ts::overlap_penalty(
+                pi, layout.problem.stations[i].bounding_radius,
+                pj, layout.problem.stations[j].bounding_radius);
+            std::cout << "  " << layout.problem.stations[i].id << " <-> "
+                      << layout.problem.stations[j].id
+                      << "  centre-dist=" << dist << "m"
+                      << "  circle-overlap-penalty=" << circle
+                      << "  (circles want >= " << (ri + rj)
+                      << "m apart; polygons fit at " << dist << "m)\n";
+        }
     }
 
     // Per-transport port diagnostic: which endpoints are variable

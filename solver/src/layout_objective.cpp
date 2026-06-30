@@ -35,6 +35,20 @@ std::vector<std::pair<double, double>> strip(const tc::Polygon& p) {
 // such overlap, and any axis with non-positive overlap is a separating
 // axis → return 0 (no overlap). BOTH inputs must be convex (an accumulated
 // station hull is a convex hull). Degenerate input (< 3 vertices) → 0.
+//
+// CAVEAT — this is a valid repulsion potential only OUTSIDE deep
+// interpenetration. The MTD rises as two hulls overlap, peaks near
+// coincidence, then DECREASES as one passes through / nests inside the
+// other (a small hull fully inside a large one yields a small finite
+// depth, not a large push-out). So sq(MTD) is non-monotone under deep
+// penetration: a derivative-free descent seeded INSIDE a neighbour could
+// fall the wrong way (toward more overlap). The objective relies on
+// stations being SEEDED SEPARATED (the positional prior + floor bounds
+// keep seeds apart), where the field correctly repels toward separation.
+// This non-monotonicity — not just the soft-penalty equilibrium residual —
+// is the deeper reason the principled fix for genuinely tight layouts is a
+// hard LN_COBYLA inequality constraint, not a stiffer soft weight
+// (decisions.md "Convex-polygon narrow-phase overlap (M4.2)").
 double convex_penetration(const tc::Polygon& a, const tc::Polygon& b) {
     if (a.size() < 3 || b.size() < 3) return 0.0;
     const auto pa = strip(a);

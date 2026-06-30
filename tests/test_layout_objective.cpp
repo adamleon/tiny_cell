@@ -32,7 +32,7 @@ ts::StationProblem make_station(const std::string& id,
                                 double nom_x = 0.0, double nom_y = 0.0) {
     return ts::StationProblem{
         .id = id,
-        .buffered_hull = {},  // not consumed at MVP
+        .buffered_hull = {},  // empty -> radius-only fallback (circle term), not the M4.2 narrow phase
         .bounding_radius = radius * metre,
         .nominal = tc::Vec2{nom_x * metre, nom_y * metre},
         .initial_pose = pose_at(x, y),

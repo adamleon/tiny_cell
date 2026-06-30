@@ -22,9 +22,9 @@
      - `pallet_in` and `pallet_out` for the palletizer co-locate naturally: both emit as Points at the same station-frame offset with the same direction (the long belt passes through the station). No "linked port" abstraction needed — they're two independent port records that happen to share their region and direction, so the optimizer puts them in the same place.
      - Inter-station placer gains per-port (x, y) variables for non-Point regions; Point ports stay welded to their offset.
 
-   - **M2 — Belt geometry** (`feature/belt-geometry`). Goal: transports become real placed objects with footprint and length.
+   - **M2 — Belt geometry.** ✅ **Shipped on `dev`** (not a feature branch — M1/M2 landed directly on `dev`). Transports become real placed objects with footprint and length, via a POST-SOLVE routing pass (`solver/belt_routing`): `BeltSpec` catalog + `io::load_belt_catalog`, `PlacedBelt` (sibling to `BoundInstance`), `route_belts()` picks the cheapest catalog belt covering the resolved distance and flags belt-vs-station collision (convex SAT; belt-vs-belt skipped). The `BeltStrategy` OR-tree competitor was deliberately NOT built — belt length is only known post-placement and magic transport is free (see `decisions.md` "Belt geometry: PlacedBelt sibling + post-solve sequential routing"). What actually shipped vs. the original concepts below:
 
-     *Concepts under discussion for M2 (not committed; subject to change before code lands):*
+     *Concepts under discussion for M2 (now mostly committed — see decisions.md; kept here for the rationale trail):*
      - `BeltSpec` catalog (width / length range / speed / throughput / list_price) + JSON loader.
      - `BeltStrategy` replacing the magical `TransferStrategy` — picks a catalog belt whose length range covers the source-sink distance.
      - `PlacedBelt` as a sibling type to `BoundInstance` (start_pose + end_pose + width + catalog ref) rather than a variant arm — point and linear placed objects differ enough in their optimisation variables that unifying them would force pervasive variant-handling. Reconsider if a third placed-object kind shows up.

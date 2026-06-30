@@ -11,17 +11,22 @@
 //        of its served palletize tasks' nominal positions
 //      - one StationProblem per PinnedAnchor, frozen at its world pose
 //   5. solve(layout_problem)                    (Phase D + E + F)
-//   6. write a world-coords SVG of the solved layout
+//   6. route_belts(...) — turn each resolved transport into a real
+//      placed conveyor (step-6 M2): cheapest catalog belt covering the
+//      routed distance, belt-vs-station collision flagged
+//   7. write a world-coords SVG of the solved layout + belts
 //
 // Success: writes <build>/demos/solve_workflow/output/layout.svg
 // containing the floor outline, every station's footprint at its
 // SOLVED pose (with arm reach envelopes overlaid), the feeder anchor
-// marker, a line per Transport edge connecting the source/sink
-// stations through their SOLVED port positions, and a filled dot at
-// each variable reach-annulus port (item_in) showing where the placer
-// put it inside the arm's reach band. Exits 0 if no station is
-// unallocated and hard_constraints_satisfied is true; non-zero with a
-// diagnostic message otherwise.
+// marker, a real belt footprint per Transport edge (a width-wide
+// conveyor between the SOLVED port positions, red if it collides with a
+// station), and a filled dot at each variable reach-annulus port
+// (item_in) showing where the placer put it inside the arm's reach
+// band. Exits 0 if no station is unallocated and
+// hard_constraints_satisfied is true; non-zero with a diagnostic
+// message otherwise. (Belt collisions/unfitted spans are REPORTED, not
+// failures — sequential placement, joint placement deferred.)
 //
 // What the SVG shows that the hand-rolled layer_3_placement demo
 // could not:
@@ -33,6 +38,9 @@
 //   - item_in as a VARIABLE reach-annulus port (step-6 M1): the placer
 //     slides it within the arm's reach band toward what it exchanges
 //     items with, and the marker lands off-origin inside the ring.
+//   - Transports as REAL belts (step-6 M2): each edge is a placed
+//     conveyor with a catalog width + length and a footprint that
+//     participates in belt-vs-station collision checking.
 
 #include <algorithm>
 #include <cmath>
@@ -56,6 +64,7 @@
 #include <tinycell/solver/allocator.hpp>
 #include <tinycell/solver/anchor_strategy.hpp>
 #include <tinycell/solver/arm_strategy.hpp>
+#include <tinycell/solver/belt_routing.hpp>
 #include <tinycell/solver/enumerator.hpp>
 #include <tinycell/solver/layout_problem.hpp>
 #include <tinycell/solver/positional_prior.hpp>
@@ -374,6 +383,7 @@ void draw_layout_svg(const ts::LayoutSolution& solution,
                      const std::vector<StationSource>& sources,
                      const ts::AllocationResult& alloc,
                      const std::vector<tc::ArmSpec>& arms,
+                     std::span<const ts::PlacedBelt> belts,
                      const std::filesystem::path& out_path) {
     // viewBox: floor extended by 10 % margin.
     const double xmin = problem.floor.x_min.numerical_value_in(metre);
@@ -399,30 +409,30 @@ void draw_layout_svg(const ts::LayoutSolution& solution,
                   tc::Vec2{xmin * metre, ymax * metre}},
               "rgba(0,0,0,0.03)", "rgba(0,0,0,0.40)", 0.05);
 
-    // Transport lines underneath stations so they don't obscure
-    // footprints. Endpoints are PORT world poses (station pose ∘ port
-    // local), not station centres — this is the geometry the Phase-1
-    // transport-distance objective scores against. Read from
-    // solution.transports (not problem.transports) so annulus ports show
-    // at their SOLVED position, not their seed (step-6 M1.4).
-    for (const auto& tr : solution.transports) {
-        const auto& src_pose  = solution.station_poses[tr.source_station];
-        const auto& dst_pose  = solution.station_poses[tr.sink_station];
-        const tc::Transform2D t_src{src_pose.x, src_pose.y, src_pose.theta};
-        const tc::Transform2D t_dst{dst_pose.x, dst_pose.y, dst_pose.theta};
-        const auto src_world = tc::apply(t_src, tr.source_port_local);
-        const auto dst_world = tc::apply(t_dst, tr.sink_port_local);
-        w.polygon(tc::Polygon{src_world, dst_world},
-                  "none", "rgba(0,80,200,0.55)", 0.04);
-        // Length label at the midpoint.
-        const double dx = (dst_world.x - src_world.x).numerical_value_in(metre);
-        const double dy = (dst_world.y - src_world.y).numerical_value_in(metre);
-        const double len_m = std::sqrt(dx * dx + dy * dy);
-        char buf[32];
-        std::snprintf(buf, sizeof(buf), "%.2f m", len_m);
-        w.text(tc::Vec2{(src_world.x + dst_world.x) * 0.5,
-                        (src_world.y + dst_world.y) * 0.5},
-               buf, 0.18, "rgba(0,80,200,0.85)");
+    // Belts (step-6 M2): each transport routed as a real placed conveyor,
+    // drawn underneath stations so a belt-through-station collision shows the
+    // belt footprint poking into the station. Colour encodes status: blue =
+    // fitted & clear, red = collides with a station. An unfitted transport
+    // (no catalog belt covers the span) has no footprint — just its orange
+    // port-to-port centreline. The belt endpoints ARE the SOLVED port world
+    // positions (route_belts composes station pose ∘ port local).
+    for (const auto& b : belts) {
+        if (b.fitted) {
+            const bool hit = b.collides_with_station;
+            w.polygon(ts::belt_footprint(b.start, b.end, b.width),
+                      hit ? "rgba(220,40,40,0.20)" : "rgba(0,120,200,0.16)",
+                      hit ? "rgba(200,0,0,0.75)" : "rgba(0,120,200,0.55)",
+                      0.03);
+        }
+        // Centreline + length label (the abstract port-to-port edge).
+        w.polygon(tc::Polygon{b.start, b.end}, "none",
+                  b.fitted ? "rgba(0,80,200,0.55)" : "rgba(230,140,0,0.90)", 0.03);
+        char buf[40];
+        std::snprintf(buf, sizeof(buf), b.fitted ? "%.2f m" : "%.2f m (no belt)",
+                      b.length.numerical_value_in(metre));
+        w.text(tc::Vec2{(b.start.x + b.end.x) * 0.5, (b.start.y + b.end.y) * 0.5},
+               buf, 0.18,
+               b.fitted ? "rgba(0,80,200,0.85)" : "rgba(230,140,0,0.95)");
     }
 
     // Stations: per source kind.
@@ -513,6 +523,8 @@ int main() {
         repo / "assets" / "arm" / "kuka" / "catalog.json");
     const auto pushers = io::load_pusher_catalog(
         repo / "assets" / "pusher" / "generic" / "catalog.json");
+    const auto belt_catalog = io::load_belt_catalog(
+        repo / "assets" / "belt" / "generic" / "catalog.json");
 
     ts::ArmStrategy arm_strategy(arms);
     ts::PusherStrategy pusher_strategy(pushers);
@@ -632,9 +644,36 @@ int main() {
                   << "\n";
     }
 
+    // Belt routing (step-6 M2): turn each resolved transport into a real
+    // placed conveyor — cheapest catalog belt covering the routed distance,
+    // with belt-vs-station collision flagged (not repaired: sequential
+    // placement, joint placement deferred — decisions.md).
+    const auto belts = ts::route_belts(layout.problem, solution, belt_catalog);
+    std::size_t unfitted = 0, colliding = 0;
+    std::cout << "\nBelts (routed):\n";
+    for (const auto& b : belts) {
+        std::cout << "  belt[" << b.transport_index << "]  ";
+        if (b.fitted) {
+            std::cout << b.belt_catalog_id
+                      << "  len=" << b.length.numerical_value_in(metre) << "m"
+                      << "  width=" << b.width.numerical_value_in(metre) << "m";
+            if (b.collides_with_station) {
+                std::cout << "  *** COLLIDES with a station ***";
+                ++colliding;
+            }
+        } else {
+            std::cout << "NO CATALOG BELT FITS  (len="
+                      << b.length.numerical_value_in(metre) << "m)";
+            ++unfitted;
+        }
+        std::cout << "\n";
+    }
+    std::cout << "  -> " << belts.size() << " belt(s), " << colliding
+              << " colliding, " << unfitted << " unfitted\n";
+
     const auto svg_path = out_dir / "layout.svg";
     draw_layout_svg(solution, layout.problem, layout.sources,
-                    allocation, arms, svg_path);
+                    allocation, arms, belts, svg_path);
     std::cout << "\nWrote " << svg_path.string() << "\n";
 
     // Exit status: any unalloc was already an early-exit, here we

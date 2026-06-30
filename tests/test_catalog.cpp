@@ -153,3 +153,63 @@ TEST(PusherCatalog, RejectsMissingPayload) {
     })");
     EXPECT_THROW(io::load_pusher_catalog(file.path()), io::ParseError);
 }
+
+// ---- Belt catalog (step-6 M2) -------------------------------------------
+
+TEST(BeltCatalog, LoadsRealGenericCatalog) {
+    auto entries = io::load_belt_catalog(
+        repo_root() / "assets" / "belt" / "generic" / "catalog.json");
+    EXPECT_EQ(entries.size(), 4U);
+}
+
+TEST(BeltCatalog, FieldsRoundTrip) {
+    auto entries = io::load_belt_catalog(
+        repo_root() / "assets" / "belt" / "generic" / "catalog.json");
+    const auto& first = entries.front();
+    EXPECT_EQ(first.id, "belt_flat_400_short");
+    EXPECT_EQ(first.family, "flat");
+    EXPECT_NEAR(first.belt_width.numerical_value_in(si::metre), 0.4, 1e-9);
+    EXPECT_NEAR(first.min_length.numerical_value_in(si::metre), 1.0, 1e-9);
+    EXPECT_NEAR(first.max_length.numerical_value_in(si::metre), 5.0, 1e-9);
+    EXPECT_NEAR(first.max_speed.numerical_value_in(si::metre / si::second), 0.5, 1e-9);
+    EXPECT_NEAR(first.list_price_eur, 2600.0, 1e-9);
+}
+
+TEST(BeltCatalog, LengthRangesAreValid) {
+    auto entries = io::load_belt_catalog(
+        repo_root() / "assets" / "belt" / "generic" / "catalog.json");
+    for (const auto& belt : entries) {
+        EXPECT_GT(belt.max_length.numerical_value_in(si::metre),
+                  belt.min_length.numerical_value_in(si::metre))
+            << "belt " << belt.id;
+    }
+}
+
+TEST(BeltCatalog, RejectsWrongCategory) {
+    TempJsonFile file(R"({"category":"arm","entries":[]})");
+    EXPECT_THROW(io::load_belt_catalog(file.path()), io::ParseError);
+}
+
+TEST(BeltCatalog, RejectsInvertedLengthRange) {
+    TempJsonFile file(R"({
+      "category":"belt",
+      "entries":[{
+        "id":"bad","model_name":"bad","family":"flat",
+        "belt_width_m":0.6,"min_length_m":9.0,"max_length_m":3.0,
+        "max_speed_m_s":0.6,"list_price_eur":4800.0
+      }]
+    })");
+    EXPECT_THROW(io::load_belt_catalog(file.path()), io::ParseError);
+}
+
+TEST(BeltCatalog, RejectsMissingWidth) {
+    TempJsonFile file(R"({
+      "category":"belt",
+      "entries":[{
+        "id":"bad","model_name":"bad","family":"flat",
+        "min_length_m":3.0,"max_length_m":9.0,
+        "max_speed_m_s":0.6,"list_price_eur":4800.0
+      }]
+    })");
+    EXPECT_THROW(io::load_belt_catalog(file.path()), io::ParseError);
+}

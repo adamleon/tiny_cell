@@ -1,0 +1,53 @@
+{
+  "schema_version": "0.1",
+  "category": "belt",
+  "vendor": "Generic",
+  "_notes": [
+    "Four placeholder straight conveyor belts spanning narrow short-run through wide long-run. Vendor data is intentionally generic — no specific catalog was traced. Replace with real datasheets (Interroll, Dorner, FlexLink) before any engineering decision relies on these numbers.",
+    "belt_width_m is the cross-belt width; the placed belt's footprint is a rectangle this wide along the routed length.",
+    "min_length_m / max_length_m bound the straight-line length the model can be built to. Belt routing (step-6 M2) selects the cheapest belt whose range covers the resolved source -> sink distance; ranges overlap on purpose so the selection has choices.",
+    "max_speed_m_s and prices are rough engineering estimates so the routing/cost code has comparable numbers; refine before use."
+  ],
+  "entries": [
+    {
+      "id": "belt_flat_400_short",
+      "model_name": "GC-F400-S",
+      "family": "flat",
+      "belt_width_m": 0.4,
+      "min_length_m": 1.0,
+      "max_length_m": 5.0,
+      "max_speed_m_s": 0.5,
+      "list_price_eur": 2600.0
+    },
+    {
+      "id": "belt_flat_600_medium",
+      "model_name": "GC-F600-M",
+      "family": "flat",
+      "belt_width_m": 0.6,
+      "min_length_m": 3.0,
+      "max_length_m": 9.0,
+      "max_speed_m_s": 0.6,
+      "list_price_eur": 4800.0
+    },
+    {
+      "id": "belt_flat_800_long",
+      "model_name": "GC-F800-L",
+      "family": "flat",
+      "belt_width_m": 0.8,
+      "min_length_m": 6.0,
+      "max_length_m": 14.0,
+      "max_speed_m_s": 0.7,
+      "list_price_eur": 8400.0
+    },
+    {
+      "id": "belt_roller_1000_long",
+      "model_name": "GC-R1000-L",
+      "family": "roller",
+      "belt_width_m": 1.0,
+      "min_length_m": 10.0,
+      "max_length_m": 22.0,
+      "max_speed_m_s": 0.5,
+      "list_price_eur": 13500.0
+    }
+  ]
+}

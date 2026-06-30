@@ -187,6 +187,29 @@ tc::ArmSpec parse_arm_spec(const json& j, const std::filesystem::path& src) {
     };
 }
 
+// Builds one BeltSpec from one catalog entry JSON object (step-6 M2). Narrower
+// than the arm/pusher schema (no footprint polygon — a belt's footprint is its
+// route, built post-placement). The length range is cross-checked here so an
+// inverted [min, max] is rejected at parse time rather than silently producing
+// a belt no distance can ever fit.
+tc::BeltSpec parse_belt_spec(const json& j, const std::filesystem::path& src) {
+    const double min_length_m = read_positive_double(j, "min_length_m", src);
+    const double max_length_m = read_positive_double(j, "max_length_m", src);
+    if (max_length_m <= min_length_m) {
+        throw ParseError(src, "max_length_m must be > min_length_m");
+    }
+    return tc::BeltSpec{
+        .id = read_non_empty_string(j, "id", src),
+        .model_name = read_non_empty_string(j, "model_name", src),
+        .family = read_non_empty_string(j, "family", src),
+        .belt_width = read_positive_double(j, "belt_width_m", src) * si::metre,
+        .min_length = min_length_m * si::metre,
+        .max_length = max_length_m * si::metre,
+        .max_speed = read_positive_double(j, "max_speed_m_s", src) * (si::metre / si::second),
+        .list_price_eur = read_positive_double(j, "list_price_eur", src),
+    };
+}
+
 } // namespace
 
 // load_arm_catalog():
@@ -268,6 +291,48 @@ std::vector<core::PusherSpec> load_pusher_catalog(const std::filesystem::path& p
     for (std::size_t i = 0; i < doc.at("entries").size(); ++i) {
         try {
             out.push_back(parse_pusher_spec(doc.at("entries")[i], path));
+        } catch (const ParseError&) {
+            throw;
+        } catch (const json::exception& e) {
+            throw ParseError(path,
+                             "entries[" + std::to_string(i) + "]: " + e.what());
+        }
+    }
+    return out;
+}
+
+// load_belt_catalog(): same shape as the loaders above — open, parse, validate
+// the top-level envelope (category="belt", entries array), then dispatch each
+// entry through parse_belt_spec. Parallel function, not templated dispatch
+// (per-category-loader decision, decisions.md).
+std::vector<core::BeltSpec> load_belt_catalog(const std::filesystem::path& path) {
+    std::ifstream input(path);
+    if (!input.is_open()) {
+        throw ParseError(path, "could not open file");
+    }
+
+    json doc;
+    try {
+        input >> doc;
+    } catch (const json::parse_error& e) {
+        throw ParseError(path, std::string("JSON parse error: ") + e.what());
+    }
+
+    if (!doc.is_object()) {
+        throw ParseError(path, "top-level JSON must be an object");
+    }
+    if (!doc.contains("category") || doc.at("category").get<std::string>() != "belt") {
+        throw ParseError(path, "expected category=\"belt\"");
+    }
+    if (!doc.contains("entries") || !doc.at("entries").is_array()) {
+        throw ParseError(path, "missing or non-array field: entries");
+    }
+
+    std::vector<core::BeltSpec> out;
+    out.reserve(doc.at("entries").size());
+    for (std::size_t i = 0; i < doc.at("entries").size(); ++i) {
+        try {
+            out.push_back(parse_belt_spec(doc.at("entries")[i], path));
         } catch (const ParseError&) {
             throw;
         } catch (const json::exception& e) {

@@ -8,6 +8,7 @@
 
 #include <filesystem>
 #include <tinycell/model/arm.hpp>
+#include <tinycell/model/belt.hpp>
 #include <tinycell/model/pusher.hpp>
 #include <vector>
 
@@ -27,5 +28,13 @@ std::vector<core::ArmSpec> load_arm_catalog(const std::filesystem::path& path);
 // at parse time; ParseError thrown on any violation with a source-locating
 // message. Returned in catalog declaration order.
 std::vector<core::PusherSpec> load_pusher_catalog(const std::filesystem::path& path);
+
+// Loads a belt catalog from JSON at `path` (step-6 M2). Same contract as the
+// loaders above (per-category loader — decisions.md): file must declare
+// `category: "belt"` and an `entries` array; range invariants are checked at
+// parse time (widths/lengths/speeds/prices positive, max_length > min_length);
+// ParseError thrown on any violation with a source-locating message. Returned
+// in catalog declaration order.
+std::vector<core::BeltSpec> load_belt_catalog(const std::filesystem::path& path);
 
 } // namespace tinycell::io

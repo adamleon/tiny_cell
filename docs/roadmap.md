@@ -82,7 +82,9 @@ Add capability when the layer it serves first needs it.
   directly and emits text. The two coexist after MVP: SVG for batch /
   CI / diffs, threepp for interactive editing.
 
-## MVP milestone — "done" means
+## MVP milestone — "done" means ✅ **MET** (steps 1–6 complete)
+
+**All criteria below are satisfied** — the system produces a recognizable robotic palletizing cell, with real belt geometry, domain-credible clearances, reach-annulus + point port regions, and (step-6 M4) multi-equipment cells with an intra-station layout. 19/19 `ctest` green on `dev`. **The project is now post-MVP — see `HANDOFF.md` for the candidate next legs** (interactive `render`/`gui` via the `sync`/`ecs` registry boundary, the parked LNS outer loop, the deferred geometric-realism increments). None scaffolded; open one crudest-concrete-first.
 
 **Re-defined 2026-05-27** (decisions.md "MVP re-scoped"). The original definition was algorithm-coverage-oriented (all three layers + LNS). The new definition is scenario-oriented: the system produces a recognizable layout for one real palletizing cell.
 

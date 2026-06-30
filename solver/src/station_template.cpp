@@ -39,11 +39,12 @@ PalletizerCellLayout layout_palletizer_cell(tc::Length reach_min,
     const double zone_br = std::sqrt(zone_hw * zone_hw + zone_hl * zone_hl);
 
     // The slot CENTRE radius R must keep the whole pallet footprint inside the
-    // reach band: far edge R + zone_br <= reach_max, and (only when there is a
-    // real reach hole, reach_min > 0) near edge R - zone_br >= reach_min. Also
-    // keep R off the arm base (>= zone_hw) so the pallet sits in front of, not
-    // around, the arm. Prefer ~60% of max reach, clamped into that window.
-    const double r_lo = std::max(rmin + zone_br, zone_hw);
+    // reach band: far edge R + zone_br <= reach_max, and near edge
+    // R - zone_br >= reach_min. The near-edge bound also keeps the pallet off
+    // the arm base — since zone_br > zone_hw, R >= reach_min + zone_br puts the
+    // zone's near face beyond the arm origin even when reach_min is 0. Prefer
+    // ~60% of max reach, clamped into that window.
+    const double r_lo = rmin + zone_br;
     const double r_hi = rmax - zone_br;
     if (r_lo > r_hi) {
         out.diagnostic =

@@ -296,13 +296,49 @@ LayoutSolution solve(const LayoutProblem& problem) {
                 "LayoutProblem::solve: annulus port reach_min exceeds reach_max "
                 "(inverted reach band)");
         }
+        // Seed the polar (r, theta) start. The emitted port_local is a
+        // NON-BINDING seed (port.hpp: an annulus (x, y) is a seed, not a
+        // weld), and ArmStrategy emits the station ORIGIN — which is the
+        // polar singularity (r = 0, theta undefined) where BOBYQA has no
+        // gradient to move on. So: use the emitted seed only if it is
+        // meaningfully off-origin; otherwise aim the port at the other
+        // transport endpoint at the band midpoint, giving the optimiser a
+        // non-degenerate start already pointed roughly the right way.
         const tc::Vec2 seed = pv.is_source ? tr.source_port_local
                                            : tr.sink_port_local;
         const double seed_x = seed.x.numerical_value_in(si::metre);
         const double seed_y = seed.y.numerical_value_in(si::metre);
-        const double seed_r = std::clamp(
-            std::sqrt(seed_x * seed_x + seed_y * seed_y), rmin, rmax);
-        const double seed_theta = std::atan2(seed_y, seed_x);
+        const double raw_r = std::sqrt(seed_x * seed_x + seed_y * seed_y);
+        constexpr double kSeedEps = 1e-9;
+        double seed_r;
+        double seed_theta;
+        if (raw_r > kSeedEps) {
+            seed_r = std::clamp(raw_r, rmin, rmax);
+            seed_theta = std::atan2(seed_y, seed_x);
+        } else {
+            seed_r = 0.5 * (rmin + rmax);  // > 0 since rmax > 0: off the singularity
+            const std::size_t own_st = pv.is_source ? tr.source_station
+                                                    : tr.sink_station;
+            const std::size_t other_st = pv.is_source ? tr.sink_station
+                                                      : tr.source_station;
+            if (own_st < n && other_st < n) {
+                const auto& own_pose = problem.stations[own_st].initial_pose;
+                const auto& other_pose = problem.stations[other_st].initial_pose;
+                const double dx =
+                    (other_pose.x - own_pose.x).numerical_value_in(si::metre);
+                const double dy =
+                    (other_pose.y - own_pose.y).numerical_value_in(si::metre);
+                // Direction toward the other endpoint, in this station's
+                // frame (port_local is station-frame; station theta is fixed).
+                const double own_theta =
+                    own_pose.theta.numerical_value_in(si::radian);
+                seed_theta = (dx == 0.0 && dy == 0.0)
+                                 ? 0.0
+                                 : std::atan2(dy, dx) - own_theta;
+            } else {
+                seed_theta = 0.0;  // bad station index; the objective will throw
+            }
+        }
         const std::size_t b = station_var_count + 2 * k;
         lb[b + 0] = rmin;
         ub[b + 0] = rmax;

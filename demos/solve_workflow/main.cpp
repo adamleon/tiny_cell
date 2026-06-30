@@ -16,10 +16,12 @@
 // Success: writes <build>/demos/solve_workflow/output/layout.svg
 // containing the floor outline, every station's footprint at its
 // SOLVED pose (with arm reach envelopes overlaid), the feeder anchor
-// marker, and a line per Transport edge connecting the source/sink
-// stations. Exits 0 if no station is unallocated and
-// hard_constraints_satisfied is true; non-zero with a diagnostic
-// message otherwise.
+// marker, a line per Transport edge connecting the source/sink
+// stations through their SOLVED port positions, and a filled dot at
+// each variable reach-annulus port (item_in) showing where the placer
+// put it inside the arm's reach band. Exits 0 if no station is
+// unallocated and hard_constraints_satisfied is true; non-zero with a
+// diagnostic message otherwise.
 //
 // What the SVG shows that the hand-rolled layer_3_placement demo
 // could not:
@@ -28,6 +30,9 @@
 //     overlap field that pushes nearby stations away.
 //   - Transport edges visualized in world coords - the topology made
 //     spatial.
+//   - item_in as a VARIABLE reach-annulus port (step-6 M1): the placer
+//     slides it within the arm's reach band toward what it exchanges
+//     items with, and the marker lands off-origin inside the ring.
 
 #include <algorithm>
 #include <cmath>
@@ -342,11 +347,21 @@ LayoutBuildResult build_layout_problem(
                       << "' has no PortConstraint on source or sink; skipped\n";
             continue;
         }
+        // Carry each endpoint's reach band (step-6 M1) so the placer sees
+        // an ANNULUS port where the strategy emitted one (ArmStrategy's
+        // item_in): reach_max set => the placer optimises that port's
+        // position within [reach_min, reach_max] of its station origin,
+        // with (x, y) above as the seed. Point ports leave the optionals
+        // unset and stay welded.
         result.problem.transports.push_back(ts::TransportConstraint{
             .source_station = src_st->second,
             .source_port_local = tc::Vec2{src_pc->x, src_pc->y},
             .sink_station = dst_st->second,
             .sink_port_local = tc::Vec2{dst_pc->x, dst_pc->y},
+            .source_reach_min = src_pc->reach_min,
+            .source_reach_max = src_pc->reach_max,
+            .sink_reach_min = dst_pc->reach_min,
+            .sink_reach_max = dst_pc->reach_max,
         });
     }
     return result;
@@ -387,8 +402,10 @@ void draw_layout_svg(const ts::LayoutSolution& solution,
     // Transport lines underneath stations so they don't obscure
     // footprints. Endpoints are PORT world poses (station pose ∘ port
     // local), not station centres — this is the geometry the Phase-1
-    // transport-distance objective scores against.
-    for (const auto& tr : problem.transports) {
+    // transport-distance objective scores against. Read from
+    // solution.transports (not problem.transports) so annulus ports show
+    // at their SOLVED position, not their seed (step-6 M1.4).
+    for (const auto& tr : solution.transports) {
         const auto& src_pose  = solution.station_poses[tr.source_station];
         const auto& dst_pose  = solution.station_poses[tr.sink_station];
         const tc::Transform2D t_src{src_pose.x, src_pose.y, src_pose.theta};
@@ -444,6 +461,26 @@ void draw_layout_svg(const ts::LayoutSolution& solution,
 
         w.text(tc::Vec2{pose.x + 0.25 * metre, pose.y + 0.35 * metre},
                station.id + ":" + bi.catalog_id, 0.25);
+    }
+
+    // Annulus port markers (step-6 M1): a filled dot at each variable
+    // reach-annulus port's SOLVED world position, drawn on TOP of the
+    // reach rings so you can see item_in landed OFF-origin inside its
+    // arm's reach band — the visible payoff of making the port a placer
+    // variable. Point ports (no reach band) get no marker.
+    for (const auto& tr : solution.transports) {
+        if (tr.source_reach_max.has_value()) {
+            const auto& sp = solution.station_poses[tr.source_station];
+            const tc::Transform2D t{sp.x, sp.y, sp.theta};
+            w.circle(tc::apply(t, tr.source_port_local), 0.10 * metre,
+                     "rgba(220,40,40,0.90)", "rgba(120,0,0,1.0)", 0.02);
+        }
+        if (tr.sink_reach_max.has_value()) {
+            const auto& sp = solution.station_poses[tr.sink_station];
+            const tc::Transform2D t{sp.x, sp.y, sp.theta};
+            w.circle(tc::apply(t, tr.sink_port_local), 0.10 * metre,
+                     "rgba(220,40,40,0.90)", "rgba(120,0,0,1.0)", 0.02);
+        }
     }
 
     // World-origin crosshair for orientation.
@@ -570,6 +607,29 @@ int main() {
                   << "  nominal=(" << s.nominal.x.numerical_value_in(metre)
                   << ", " << s.nominal.y.numerical_value_in(metre) << ")"
                   << (s.frozen ? "  [frozen]" : "") << "\n";
+    }
+
+    // Per-transport port diagnostic: which endpoints are variable
+    // reach-annulus ports (step-6 M1) and where each landed relative to
+    // its station origin (radius), so the band placement is legible in
+    // the terminal, not just the SVG.
+    auto port_radius = [](const tc::Vec2& v) {
+        const double x = v.x.numerical_value_in(metre);
+        const double y = v.y.numerical_value_in(metre);
+        return std::sqrt(x * x + y * y);
+    };
+    std::cout << "\nTransport ports (solved):\n";
+    for (std::size_t t = 0; t < solution.transports.size(); ++t) {
+        const auto& tr = solution.transports[t];
+        std::cout << "  xport[" << t << "]  src st" << tr.source_station
+                  << (tr.source_reach_max.has_value()
+                          ? "  ANNULUS r=" + std::to_string(port_radius(tr.source_port_local))
+                          : "  point")
+                  << "  ->  sink st" << tr.sink_station
+                  << (tr.sink_reach_max.has_value()
+                          ? "  ANNULUS r=" + std::to_string(port_radius(tr.sink_port_local))
+                          : "  point")
+                  << "\n";
     }
 
     const auto svg_path = out_dir / "layout.svg";

@@ -472,6 +472,47 @@ TEST(LayoutSolve, AnnulusPortVariableWhenStationFrozen) {
     EXPECT_LE(r, 0.6 + 1e-6) << "port left the reach band: r = " << r;
 }
 
+TEST(LayoutSolve, DiscAnnulusWithOriginSeedSlidesTowardSink) {
+    // Regression for the polar r=0 singularity: a DISC reach band
+    // (reach_min unset => 0) with the port SEEDED at the station origin,
+    // exactly as ArmStrategy emits item_in. The naive polar seed
+    // (r=0, theta=0) is the singularity where BOBYQA has no gradient to
+    // move on; solve() must instead seed the port toward the other
+    // endpoint at the band midpoint, so it slides out to the band edge
+    // toward the (frozen) feeder rather than staying stuck at the origin.
+    // (M1.4's other annulus tests all used reach_min=0.3 > 0, which masks
+    // this; the solve_workflow demo's real catalog has reach_min=0.)
+    auto arm = make_station("arm", 10.0, 0.0, 0.5, 10.0, 0.0);
+    auto feeder = make_station("feeder", 0.0, 0.0, 0.5, 0.0, 0.0);
+    feeder.frozen = true;
+    const tc::Vec2 origin{0.0 * metre, 0.0 * metre};
+
+    ts::LayoutProblem p{
+        .stations = {arm, feeder},
+        .transports = {
+            ts::TransportConstraint{
+                .source_station = 1,            // feeder is the (point) source
+                .source_port_local = origin,
+                .sink_station = 0,              // arm item_in is the annulus sink
+                .sink_port_local = origin,      // SEEDED at the arm origin (degenerate)
+                .sink_reach_max = 1.6 * metre,  // DISC band [0, 1.6] (reach_min unset)
+            },
+        },
+        .floor = ts::Floor{-5.0 * metre, 20.0 * metre, -5.0 * metre, 5.0 * metre},
+        .weights = ts::ObjectiveWeights{.transport = 1.0},
+    };
+    auto out = ts::solve(p);
+    ASSERT_EQ(out.transports.size(), 1u);
+    const double px = out.transports[0].sink_port_local.x.numerical_value_in(metre);
+    const double py = out.transports[0].sink_port_local.y.numerical_value_in(metre);
+    const double r = std::sqrt(px * px + py * py);
+    // Not stuck at the origin, pointed toward the feeder at -x, in band.
+    EXPECT_GT(r, 0.5) << "disc-band port stuck near the origin singularity: r = " << r;
+    EXPECT_LT(px, -0.4) << "disc-band port did not point toward the feeder: x = " << px;
+    EXPECT_LE(r, 1.6 + 1e-6) << "disc-band port left its band: r = " << r;
+    EXPECT_TRUE(out.hard_constraints_satisfied);
+}
+
 TEST(LayoutSolve, BothEndpointsAnnulusLandInTheirOwnBands) {
     // Both ends of ONE transport are annulus ports with DIFFERENT bands.
     // Exercises collect_port_vars ordering (source before sink) and the

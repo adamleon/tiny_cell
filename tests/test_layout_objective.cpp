@@ -39,7 +39,50 @@ ts::StationProblem make_station(const std::string& id,
     };
 }
 
+// Axis-aligned rectangle (half-extents hw × hh) centred at (cx, cy), CCW.
+tc::Polygon rect_poly(double cx, double cy, double hw, double hh) {
+    return {tc::Vec2{(cx - hw) * metre, (cy - hh) * metre},
+            tc::Vec2{(cx + hw) * metre, (cy - hh) * metre},
+            tc::Vec2{(cx + hw) * metre, (cy + hh) * metre},
+            tc::Vec2{(cx - hw) * metre, (cy + hh) * metre}};
+}
+
 } // namespace
+
+// ---- overlap_penalty_poly (narrow phase, step-6 M4.2) -------------------
+
+TEST(OverlapPenaltyPoly, ZeroWhenSeparated) {
+    EXPECT_NEAR(ts::overlap_penalty_poly(rect_poly(0, 0, 1, 1),
+                                         rect_poly(3, 0, 1, 1)),
+                0.0, 1e-12);
+}
+
+TEST(OverlapPenaltyPoly, SquaredPenetrationDepth) {
+    // a: x in [-1,1]; b: x in [0.5,2.5] → x-overlap 0.5, y-overlap 2 →
+    // minimum translation distance 0.5 → penalty 0.25.
+    EXPECT_NEAR(ts::overlap_penalty_poly(rect_poly(0, 0, 1, 1),
+                                         rect_poly(1.5, 0, 1, 1)),
+                0.25, 1e-9);
+}
+
+TEST(OverlapPenaltyPoly, DegenerateInputIsZero) {
+    EXPECT_NEAR(ts::overlap_penalty_poly({}, rect_poly(0, 0, 1, 1)), 0.0, 1e-12);
+}
+
+TEST(OverlapPenaltyPoly, ElongatedCellsPackTighterThanBoundingCircle) {
+    // Two wide-thin cells (4 × 1) stacked with a 0.2 m vertical gap: their
+    // footprints are clear (poly penalty 0) but their bounding circles
+    // (radius ~2.06) heavily overlap (circle penalty large). The whole
+    // point of the narrow phase: an elongated cell packs to footprint
+    // contact, not bounding-circle contact.
+    auto a = rect_poly(0, 0.0, 2.0, 0.5);
+    auto b = rect_poly(0, 1.2, 2.0, 0.5);  // a's top 0.5, b's bottom 0.7 → 0.2 gap
+    EXPECT_NEAR(ts::overlap_penalty_poly(a, b), 0.0, 1e-12);
+    const double r = std::sqrt(2.0 * 2.0 + 0.5 * 0.5);  // bounding radius
+    EXPECT_GT(ts::overlap_penalty(pose_at(0, 0.0), r * metre,
+                                  pose_at(0, 1.2), r * metre),
+              1.0);  // circles would force them ~4 m apart
+}
 
 // ---- overlap_penalty ----------------------------------------------------
 
@@ -373,6 +416,62 @@ TEST(DecomposeObjective, IncludesAnnulusTermForAnnulusEndpoints) {
     EXPECT_NEAR(b.annulus, 4.0 * 1.0, 1e-9);  // weight 4 x violation 1
     EXPECT_NEAR(b.total, b.overlap + b.floor + b.prior + b.transport + b.annulus, 1e-9);
     EXPECT_NEAR(b.total, ts::evaluate_objective(p, poses), 1e-9);
+}
+
+TEST(DecomposeObjective, NarrowPhaseReadsFootprintNotBoundingCircle) {
+    // Two stations with thin station-frame hulls (4 × 1, centred at the
+    // station origin), posed 1.2 m apart in y: footprints clear (0.2 m
+    // gap) even though the bounding circles overlap heavily. The overlap
+    // term must read 0 (polygon), and hard_constraints_satisfied must agree.
+    const double r = std::sqrt(2.0 * 2.0 + 0.5 * 0.5);
+    const auto hull = rect_poly(0, 0, 2.0, 0.5);  // station frame, origin-centred
+    ts::LayoutProblem p{
+        .stations = {
+            ts::StationProblem{.id = "a", .buffered_hull = hull,
+                               .bounding_radius = r * metre,
+                               .nominal = tc::Vec2{0.0 * metre, 0.0 * metre},
+                               .initial_pose = pose_at(0.0, 0.0)},
+            ts::StationProblem{.id = "b", .buffered_hull = hull,
+                               .bounding_radius = r * metre,
+                               .nominal = tc::Vec2{0.0 * metre, 1.2 * metre},
+                               .initial_pose = pose_at(0.0, 1.2)},
+        },
+        .floor = ts::Floor{-10.0 * metre, 10.0 * metre, -10.0 * metre, 10.0 * metre},
+        .weights = ts::ObjectiveWeights{.overlap = 1.0, .floor = 0.0,
+                                        .positional_prior = 0.0, .transport = 0.0},
+    };
+    const std::vector<tc::Pose2D> poses{pose_at(0.0, 0.0), pose_at(0.0, 1.2)};
+    EXPECT_NEAR(ts::decompose_objective(p, poses).overlap, 0.0, 1e-12);
+    EXPECT_TRUE(ts::hard_constraints_satisfied(p, poses));
+    // Sanity: the bounding circles DO overlap, so the change is real.
+    EXPECT_GT(ts::overlap_penalty(poses[0], r * metre, poses[1], r * metre), 1.0);
+}
+
+TEST(DecomposeObjective, NarrowPhasePenalisesActualFootprintOverlap) {
+    // Same hulls, now posed 0.6 m apart in y → footprints overlap by 0.4 m
+    // (a's top 0.5, b's bottom 0.1) → minimum translation distance 0.4 →
+    // penalty 0.16. Confirms the polygon term penalises real overlap, not
+    // just rejects the false-positive circle case above.
+    const double r = std::sqrt(2.0 * 2.0 + 0.5 * 0.5);
+    const auto hull = rect_poly(0, 0, 2.0, 0.5);
+    ts::LayoutProblem p{
+        .stations = {
+            ts::StationProblem{.id = "a", .buffered_hull = hull,
+                               .bounding_radius = r * metre,
+                               .nominal = tc::Vec2{0.0 * metre, 0.0 * metre},
+                               .initial_pose = pose_at(0.0, 0.0)},
+            ts::StationProblem{.id = "b", .buffered_hull = hull,
+                               .bounding_radius = r * metre,
+                               .nominal = tc::Vec2{0.0 * metre, 0.6 * metre},
+                               .initial_pose = pose_at(0.0, 0.6)},
+        },
+        .floor = ts::Floor{-10.0 * metre, 10.0 * metre, -10.0 * metre, 10.0 * metre},
+        .weights = ts::ObjectiveWeights{.overlap = 1.0, .floor = 0.0,
+                                        .positional_prior = 0.0, .transport = 0.0},
+    };
+    const std::vector<tc::Pose2D> poses{pose_at(0.0, 0.0), pose_at(0.0, 0.6)};
+    EXPECT_NEAR(ts::decompose_objective(p, poses).overlap, 0.16, 1e-9);
+    EXPECT_FALSE(ts::hard_constraints_satisfied(p, poses));
 }
 
 TEST(EvaluateObjective, RejectsTransportWithOutOfRangeStation) {

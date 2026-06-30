@@ -24,6 +24,24 @@ namespace tinycell::solver {
 double overlap_penalty(const core::Pose2D& pose_a, core::Length radius_a,
                        const core::Pose2D& pose_b, core::Length radius_b);
 
+// Convex-polygon NARROW-PHASE overlap penalty (step-6 M4.2): squared
+// penetration depth (minimum translation distance) between two convex
+// footprint polygons given in WORLD coordinates, via the separating-axis
+// theorem. Returns 0 when a separating axis exists (no overlap). The
+// accumulated station hull is a convex hull, so SAT applies.
+//
+// This is the narrow-phase refinement of the bounding-circle
+// overlap_penalty above: an elongated cell (e.g. an arm + an offset pallet
+// zone) packs to FOOTPRINT contact instead of being held off by its
+// conservative bounding circle, which is dominated by the cell's longest
+// extent. decompose_objective / hard_constraints_satisfied use the circle
+// as a cheap broad-phase reject, then this when the circles overlap AND
+// both stations carry a footprint; a station with no footprint (anchors,
+// or radius-only callers) falls back to the circle term. Pure core — no
+// foreign lib (CLAUDE.md §1) — same SAT family as belt-vs-station collision.
+double overlap_penalty_poly(const core::Polygon& world_a,
+                            const core::Polygon& world_b);
+
 // Soft floor-bounds penalty: a station's bounding circle should fit
 // entirely inside the floor rectangle. Penalty grows quadratically
 // with the out-of-bounds depth on each side (left/right/top/bottom);

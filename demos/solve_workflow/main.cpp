@@ -683,10 +683,15 @@ int main() {
     // pulls the two arms apart into two rows) and both ship to one shared
     // dispatch. Anchor world poses lay the material flow out as two rows.
     const std::vector<tc::Task> workflow{
-        // Anchors (frozen world poses).
+        // Anchors (frozen world poses). The empty-pallet supplies sit only
+        // modestly off the centreline (±3 m) and the cells are seeded close
+        // (±1.2 m, below) — so the two lines WANT to crowd the
+        // feeder→dispatch corridor, and what holds them apart is their
+        // accumulated CELL FOOTPRINT (M4.2 narrow phase), not their
+        // conservative bounding circles. They settle at footprint contact.
         make_feeder("t_feeder",    0.0,  0.0),   // box infeed (shared)
-        make_feeder("t_empty_n",   9.0,  6.0),   // empty-pallet supply, north line
-        make_feeder("t_empty_s",   9.0, -6.0),   // empty-pallet supply, south line
+        make_feeder("t_empty_n",  10.0,  3.0),   // empty-pallet supply, north line
+        make_feeder("t_empty_s",  10.0, -3.0),   // empty-pallet supply, south line
         make_dispatch("t_dispatch", 16.0, 0.0),  // full-pallet outfeed (shared)
         // Palletize tasks (the two robot cells).
         make_palletize("t_pal_heavy", 25.0, 1.2, 1.0, 16, 8.0),  // north
@@ -737,8 +742,8 @@ int main() {
     // I→O axis, which would stack the two lines on the centreline; a
     // two-row plant wants them seeded on opposite rows, so assign directly.
     const std::map<std::string, tc::Vec2> nominal_for_task{
-        {"t_pal_heavy", tc::Vec2{8.0 * metre,  3.5 * metre}},
-        {"t_pal_light", tc::Vec2{8.0 * metre, -3.5 * metre}},
+        {"t_pal_heavy", tc::Vec2{8.0 * metre,  1.2 * metre}},
+        {"t_pal_light", tc::Vec2{8.0 * metre, -1.2 * metre}},
     };
 
     // Floor: room for both rows + the arms' reach envelopes and the
@@ -746,8 +751,15 @@ int main() {
     const ts::Floor floor{
         .x_min = -3.0 * metre, .x_max = 19.0 * metre,
         .y_min = -8.0 * metre, .y_max = 8.0 * metre};
+    // Overlap weight is stiff (M4.2): with the narrow-phase polygon term the
+    // two cells pack to FOOTPRINT contact, where the soft penalty balances
+    // against the transport pull toward the shared dispatch. A high weight
+    // keeps that equilibrium residual sub-millimetre so the strict
+    // hard_constraints check still passes (the principled fix for tight
+    // layouts — a hard COBYLA inequality constraint — is a later increment;
+    // decisions.md "Floor as hard NLopt bound; overlap as soft penalty").
     const ts::ObjectiveWeights weights{
-        .overlap = 1000.0, .floor = 100.0, .positional_prior = 1.0};
+        .overlap = 20000.0, .floor = 100.0, .positional_prior = 1.0};
 
     auto layout = build_layout_problem(
         allocation, enumeration, arms, pushers, nominal_for_task,

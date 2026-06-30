@@ -1,8 +1,12 @@
 #include "tinycell/solver/layout_objective.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 #include <mp-units/systems/si.h>
 #include <stdexcept>
+#include <utility>
+#include <vector>
 
 namespace tinycell::solver {
 
@@ -11,6 +15,87 @@ using namespace mp_units;
 namespace tc = tinycell::core;
 
 double sq(double x) { return x * x; }
+
+// Strip a polygon to plain (x, y) metres for the SAT math (the overlap
+// kernel works in doubles like the other penalties; units reattach at the
+// boundary).
+std::vector<std::pair<double, double>> strip(const tc::Polygon& p) {
+    std::vector<std::pair<double, double>> out;
+    out.reserve(p.size());
+    for (const auto& v : p) {
+        out.push_back({v.x.numerical_value_in(si::metre),
+                       v.y.numerical_value_in(si::metre)});
+    }
+    return out;
+}
+
+// Minimum translation distance (penetration depth) between two convex
+// polygons via SAT. Tests every edge normal of both polygons (NORMALISED,
+// so the projection overlap is a real distance); the depth is the smallest
+// such overlap, and any axis with non-positive overlap is a separating
+// axis → return 0 (no overlap). BOTH inputs must be convex (an accumulated
+// station hull is a convex hull). Degenerate input (< 3 vertices) → 0.
+double convex_penetration(const tc::Polygon& a, const tc::Polygon& b) {
+    if (a.size() < 3 || b.size() < 3) return 0.0;
+    const auto pa = strip(a);
+    const auto pb = strip(b);
+    double min_overlap = std::numeric_limits<double>::max();
+    for (const auto* edges : {&pa, &pb}) {
+        const auto& e = *edges;
+        const std::size_t n = e.size();
+        for (std::size_t i = 0; i < n; ++i) {
+            const auto& p0 = e[i];
+            const auto& p1 = e[(i + 1) % n];
+            double ax = -(p1.second - p0.second);  // outward normal of edge
+            double ay = (p1.first - p0.first);
+            const double len = std::sqrt(ax * ax + ay * ay);
+            if (len < 1e-12) continue;  // degenerate edge
+            ax /= len;
+            ay /= len;
+            double min_a = std::numeric_limits<double>::max(), max_a = -min_a;
+            for (const auto& v : pa) {
+                const double d = v.first * ax + v.second * ay;
+                min_a = std::min(min_a, d);
+                max_a = std::max(max_a, d);
+            }
+            double min_b = std::numeric_limits<double>::max(), max_b = -min_b;
+            for (const auto& v : pb) {
+                const double d = v.first * ax + v.second * ay;
+                min_b = std::min(min_b, d);
+                max_b = std::max(max_b, d);
+            }
+            const double overlap = std::min(max_a, max_b) - std::max(min_a, min_b);
+            if (overlap <= 0.0) return 0.0;  // separating axis → no overlap
+            min_overlap = std::min(min_overlap, overlap);
+        }
+    }
+    return min_overlap;
+}
+
+// World-frame accumulated hull of a station at `pose` (empty if the
+// station has no footprint — anchors, radius-only test stations). One
+// transform on the cached accumulated polygon: the allowed flatten
+// granularity (CLAUDE.md §3), NOT a per-equipment express().
+tc::Polygon world_hull_of(const StationProblem& s, const tc::Pose2D& pose) {
+    if (s.buffered_hull.size() < 3) return {};
+    return tc::apply(tc::Transform2D{pose.x, pose.y, pose.theta}, s.buffered_hull);
+}
+
+// Overlap penalty between two stations: bounding-circle broad phase, then
+// convex-polygon narrow phase when BOTH carry a footprint. `wa`/`wb` are
+// the pre-transformed world hulls (empty when the station has none, in
+// which case the circle term is the answer — the fallback that keeps
+// radius-only callers, anchors, and the existing circle tests intact).
+double pair_overlap_penalty(const tc::Pose2D& pa, const StationProblem& sa,
+                            const tc::Polygon& wa, const tc::Pose2D& pb,
+                            const StationProblem& sb, const tc::Polygon& wb) {
+    const double circle =
+        overlap_penalty(pa, sa.bounding_radius, pb, sb.bounding_radius);
+    if (wa.empty() || wb.empty()) return circle;  // radius-only fallback
+    if (circle == 0.0) return 0.0;                 // broad-phase reject
+    return sq(convex_penetration(wa, wb));         // narrow-phase depth
+}
+
 } // namespace
 
 double overlap_penalty(const tc::Pose2D& pose_a, tc::Length radius_a,
@@ -23,6 +108,10 @@ double overlap_penalty(const tc::Pose2D& pose_a, tc::Length radius_a,
     if (dist >= min_required) return 0.0;
     const double depth = min_required - dist;
     return sq(depth);
+}
+
+double overlap_penalty_poly(const tc::Polygon& world_a, const tc::Polygon& world_b) {
+    return sq(convex_penetration(world_a, world_b));
 }
 
 double floor_penalty(const tc::Pose2D& pose, tc::Length radius,
@@ -98,15 +187,23 @@ ObjectiveBreakdown decompose_objective(const LayoutProblem& problem,
     const auto& w = problem.weights;
     ObjectiveBreakdown b;
 
+    // Flatten each station's accumulated hull to world ONCE (one transform
+    // per station — the kernel-boundary flatten, CLAUDE.md §3); the
+    // pair-wise overlap loop then reads these flat instead of re-transforming
+    // per pair.
+    std::vector<tc::Polygon> world_hull(problem.stations.size());
+    for (std::size_t i = 0; i < problem.stations.size(); ++i) {
+        world_hull[i] = world_hull_of(problem.stations[i], poses[i]);
+    }
+
     for (std::size_t i = 0; i < problem.stations.size(); ++i) {
         const auto& s = problem.stations[i];
         b.floor += w.floor * floor_penalty(poses[i], s.bounding_radius, problem.floor);
         b.prior += w.positional_prior * prior_penalty(poses[i], s.nominal);
         for (std::size_t j = i + 1; j < problem.stations.size(); ++j) {
             const auto& s2 = problem.stations[j];
-            b.overlap += w.overlap * overlap_penalty(
-                poses[i], s.bounding_radius,
-                poses[j], s2.bounding_radius);
+            b.overlap += w.overlap * pair_overlap_penalty(
+                poses[i], s, world_hull[i], poses[j], s2, world_hull[j]);
         }
     }
     for (const auto& tr : transports) {
@@ -167,6 +264,10 @@ bool hard_constraints_satisfied(const LayoutProblem& problem,
     // below as effectively zero. (1 micrometre² of overlap, 1 micrometre²
     // of out-of-floor extent - far below any real engineering tolerance.)
     constexpr double kFeasibilityEps = 1e-6;
+    std::vector<tc::Polygon> world_hull(problem.stations.size());
+    for (std::size_t i = 0; i < problem.stations.size(); ++i) {
+        world_hull[i] = world_hull_of(problem.stations[i], poses[i]);
+    }
     for (std::size_t i = 0; i < problem.stations.size(); ++i) {
         const auto& s = problem.stations[i];
         if (floor_penalty(poses[i], s.bounding_radius, problem.floor) > kFeasibilityEps) {
@@ -174,8 +275,11 @@ bool hard_constraints_satisfied(const LayoutProblem& problem,
         }
         for (std::size_t j = i + 1; j < problem.stations.size(); ++j) {
             const auto& s2 = problem.stations[j];
-            if (overlap_penalty(poses[i], s.bounding_radius,
-                                poses[j], s2.bounding_radius) > kFeasibilityEps) {
+            // Same broad-then-narrow phase the objective uses, so the
+            // feasibility flag matches the term it scored: a footprint
+            // pair must be polygon-clear, not merely circle-clear.
+            if (pair_overlap_penalty(poses[i], s, world_hull[i],
+                                     poses[j], s2, world_hull[j]) > kFeasibilityEps) {
                 return false;
             }
         }

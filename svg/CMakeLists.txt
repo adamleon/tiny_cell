@@ -3,6 +3,7 @@
 
 add_library(tinycell_svg STATIC
     src/svg.cpp
+    src/workflow_svg.cpp
 )
 target_include_directories(tinycell_svg PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include

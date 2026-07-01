@@ -18,6 +18,41 @@ target_compile_definitions(test_catalog PRIVATE
 )
 add_test(NAME test_catalog COMMAND test_catalog)
 
+add_executable(test_workflow_loader test_workflow_loader.cpp)
+target_link_libraries(test_workflow_loader PRIVATE
+    TinyCell::core
+    TinyCell::io
+    GTest::gtest
+    GTest::gtest_main
+)
+add_test(NAME test_workflow_loader COMMAND test_workflow_loader)
+
+add_executable(test_workflow_svg test_workflow_svg.cpp)
+target_link_libraries(test_workflow_svg PRIVATE
+    TinyCell::core
+    TinyCell::io
+    TinyCell::svg
+    GTest::gtest
+    GTest::gtest_main
+)
+target_compile_definitions(test_workflow_svg PRIVATE
+    TINYCELL_REPO_ROOT="${CMAKE_SOURCE_DIR}"
+)
+add_test(NAME test_workflow_svg COMMAND test_workflow_svg)
+
+add_executable(test_demo_scenario test_demo_scenario.cpp)
+target_link_libraries(test_demo_scenario PRIVATE
+    TinyCell::core
+    TinyCell::io
+    TinyCell::solver
+    GTest::gtest
+    GTest::gtest_main
+)
+target_compile_definitions(test_demo_scenario PRIVATE
+    TINYCELL_REPO_ROOT="${CMAKE_SOURCE_DIR}"
+)
+add_test(NAME test_demo_scenario COMMAND test_demo_scenario)
+
 add_executable(test_strategy test_strategy.cpp)
 target_link_libraries(test_strategy PRIVATE
     TinyCell::core

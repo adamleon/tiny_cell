@@ -1,5 +1,6 @@
 add_library(tinycell_io STATIC
     src/catalog_loader.cpp
+    src/workflow_loader.cpp
 )
 target_include_directories(tinycell_io PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include

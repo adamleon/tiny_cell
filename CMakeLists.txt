@@ -53,6 +53,7 @@ add_subdirectory(io)
 add_subdirectory(adapters/boost_conv)
 add_subdirectory(svg)
 add_subdirectory(solver)
+add_subdirectory(pipeline)
 
 if(TINYCELL_BUILD_TESTS)
     FetchContent_Declare(

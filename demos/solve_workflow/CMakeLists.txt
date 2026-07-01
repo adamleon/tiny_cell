@@ -3,7 +3,7 @@ target_link_libraries(demo_solve_workflow PRIVATE
     TinyCell::core
     TinyCell::io
     TinyCell::solver
-    TinyCell::boost_conv
+    TinyCell::pipeline
     TinyCell::svg
 )
 target_compile_definitions(demo_solve_workflow PRIVATE

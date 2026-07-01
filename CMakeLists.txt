@@ -13,6 +13,9 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(TINYCELL_BUILD_TESTS "Build tests" ON)
 option(TINYCELL_BUILD_DEMOS "Build per-milestone demos" ON)
+# Post-MVP sales-demo track (HANDOFF.md). OFF by default so the core build/tests
+# are byte-for-byte unaffected; ON pulls threepp + Vulkan into render/ only.
+option(TINYCELL_WITH_VULKAN "Build the post-MVP Vulkan render module (requires the Vulkan SDK + threepp)" OFF)
 
 include(FetchContent)
 
@@ -66,4 +69,41 @@ endif()
 
 if(TINYCELL_BUILD_DEMOS)
     add_subdirectory(demos)
+endif()
+
+# ── Post-MVP sales-demo track: interactive 3D via threepp (Vulkan) ───────────
+# Opt-in and OFF by default (see the option above) so the core build/tests are
+# untouched. threepp + Vulkan are foreign libs confined to render/ (CLAUDE.md
+# §0/§1). threepp has no vcpkg port, so it enters via FetchContent like the other
+# source deps above. See HANDOFF.md for the demo plan.
+if(TINYCELL_WITH_VULKAN)
+    # threepp's VulkanRenderer #includes <vk_mem_alloc.h> (Vulkan Memory Allocator),
+    # which the LunarG SDK does not bundle. Fetch the header and pre-seed threepp's
+    # VMA search (find_path(VMA_INCLUDE_DIR ...)) BEFORE threepp is configured.
+    FetchContent_Declare(
+        vma
+        GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
+        GIT_TAG v3.1.0
+    )
+    FetchContent_GetProperties(vma)
+    if(NOT vma_POPULATED)
+        FetchContent_Populate(vma)   # header-only: download, don't add its CMake
+    endif()
+    set(VMA_INCLUDE_DIR "${vma_SOURCE_DIR}/include" CACHE PATH "VMA include dir for threepp" FORCE)
+
+    set(THREEPP_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(THREEPP_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+    set(THREEPP_WITH_VULKAN    ON  CACHE BOOL "" FORCE)
+    FetchContent_Declare(
+        threepp
+        GIT_REPOSITORY https://github.com/markaren/threepp.git
+        GIT_TAG master   # research-grade + fast-moving: pin a commit before the demo ships
+        SYSTEM
+    )
+    FetchContent_MakeAvailable(threepp)
+
+    find_package(Vulkan REQUIRED)
+    message(STATUS "TinyCell: Vulkan render module ON (Vulkan ${Vulkan_VERSION})")
+
+    add_subdirectory(render)
 endif()

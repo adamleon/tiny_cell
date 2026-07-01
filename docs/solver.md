@@ -31,11 +31,13 @@ OR ── RobotArmStrategy
 
 Pusher is often cheaper per-task but pushes complexity into preconditions (indexing conveyor, alignment). Whether it wins is for the solver to compute.
 
-### Layer 2 — Resource allocation & sharing [MVP]
+### Layer 2 — Resource allocation & sharing [MVP — sharing inactive in first scenario]
 
 Treat equipment as **resources with a time budget and spatial reach**, not something owned by a subtree. Bind candidate requirements to physical catalog instances, deciding where one instance serves multiple tasks. Generalized assignment / bin-packing: pack tasks onto instances subject to per-instance cycle-time capacity and reachability, minimizing instance count (hence capex).
 
 **Cross-station sharing emerges here** — an arm placed for Station 2, with spare cycle-time budget and Station 1 within reach, wins `Transport(S1→S2)` at near-zero marginal capex.
+
+> **Status (2026-05-27):** the sharing path stays in the code (already shipped) but the re-scoped MVP scenario (one realistic palletizer) doesn't exercise it — every task gets its own instance. The mechanism re-activates as soon as a scenario with reach-overlapping tasks lands. See `roadmap.md`.
 
 Two sharing levels (see glossary): strategy-class reuse (matching) and instance reuse (binding).
 
@@ -43,17 +45,22 @@ Two sharing levels (see glossary): strategy-class reuse (matching) and instance 
 
 ### Layer 3 — Continuous layout [MVP]
 
-Variables: `(x, y, θ)` per point-equipment instance + conveyor segment routing. Geometry is **2D** (footprints + reach circles), not 3D kinematics **[deferred]**.
+**Variables (today).** Per-station `(x, y, θ)` for inter-station placement; port positions are fixed offsets in the station frame (everything-at-(0,0) for arms, stroke endpoint for pushers). Step-6 M1 plans to add per-port (x, y) variables constrained by region — see `roadmap.md`. Belt routing variables land in M2; today transports are abstract edges between fixed port offsets composed with station pose. Geometry is **2D** (footprints + reach circles), not 3D kinematics **[deferred]**.
 
-**Hard constraints:** no footprint overlap; no overlap with blueprint obstacles; within floor bounds; reach feasibility (assigned task points within reach envelopes); safety clearances from `standards.md`.
+**Hard constraints:** no footprint overlap; no overlap with blueprint obstacles; within floor bounds; reach feasibility (assigned task points within reach envelopes — currently bounding-circle proxy); safety clearances from `standards.md`. M1 adds port-region membership when ports become variables.
 
 **Objective:** minimize energy cost (primary) + capex + conveyor/transfer length, plus soft terms:
-- **Reach-band preference:** penalty for pickup/dropoff outside 30–70 % of reach (soft — the hard reach constraint is the envelope itself).
+- **Transport distance:** sum of squared distances between connected port-world positions (port-local composed with station pose). Added step 6 Phase 1 — the term that makes the placer care about moving stations toward what they exchange items with. See `decisions.md` "Transport-distance term".
+- **Reach-band preference:** penalty for pickup/dropoff outside 30–70% of reach (planned with M1 — needs per-port positions to be meaningful).
 - **Workflow positional prior** (below).
 
-**Method:** NLP with a good initial guess (IPOPT / SLSQP for a few dozen rigid bodies); overlap as a smooth penalty during search. If infeasible, propagate back: invalidate the Layer 2 binding, possibly the Layer 1 strategy choice, record the conflicting combination.
+**Cost decomposition.** `solve()` returns `LayoutSolution.cost: ObjectiveBreakdown` carrying the per-term weighted contributions plus their sum, not a flat scalar — consumers (debugging, future LNS trace, future GUI) need to attribute changes to a specific term. See `decisions.md` "Decomposed cost on `LayoutSolution`".
 
-### Outer loop — Large Neighborhood Search + simulated annealing [MVP]
+**Method.** NLP via NLopt `LN_BOBYQA` (derivative-free, handles the C0 kinks of `max(0, depth)²` penalties gracefully). Floor as hard NLopt bounds; overlap as soft penalty. If infeasible, propagate back: invalidate the Layer 2 binding, possibly the Layer 1 strategy choice, record the conflicting combination. Algorithm choice + library are recorded in `decisions.md` ("Layer-3 NLP backend" and "Layer-3 algorithm").
+
+### Outer loop — Large Neighborhood Search + simulated annealing [deferred from MVP]
+
+> **Status (2026-05-27):** *Built and parked.* A working LNS skeleton + SA acceptance lives on `feature/step-6-lns` (Phases 3-5 there). Evaluation on a single-station destroy operator + smooth 2D NLP inner solver showed freed stations re-converge deterministically against the frozen rest — proposed moves never strictly worsen, so Metropolis never fires and LNS only polishes µm-scale residuals. The inner problem was the limiting factor: with one-instance-per-station at origin and port positions at `(0,0)`, there were no genuine local optima to escape. MVP re-scoped to make the inner problem real first; LNS resurrects when destroy operators broaden (>1 station) or the objective becomes non-smooth enough that the inner solver lands in different local mins from different seeds. See `decisions.md` "MVP re-scoped" and `roadmap.md`. The algorithm description below remains the eventual target.
 
 1. **Construct:** greedy AND-OR expansion (best standalone strategy per task), quick capacity-packing assignment, constructive placement seeded by the positional prior.
 2. **Repair to feasibility:** locally relax (rotate, swap worst-fitting strategy) until feasible; record conflicts that resist repair.
@@ -98,7 +105,7 @@ World transforms happen **only at the top level, only for the station that moved
 
 ### Accumulated footprint: hull + union (broad/narrow phase)
 
-**One unified `StationFootprint` object** (`data-model-v2.md` §3.1) holding both fidelities — they describe the same footprint and share invalidation, so they are never cached separately (preventing drift). Within it:
+**One unified `StationFootprint` object** (`data-model.md` §3.1) holding both fidelities — they describe the same footprint and share invalidation, so they are never cached separately (preventing drift). Within it:
 - **Convex hull** — always present; fast-reject broad phase. Hulls don't overlap → stations definitely don't collide → done. Covers the common "clearly no collision" case with one cheap test. Also serves as a cheap "floor wanted" proxy for Layer 2 / positional-prior spacing, so it has consumers beyond collision.
 - **True union** (non-convex) — **lazy/optional**; built only on the first narrow-phase need (when hulls *do* overlap — might be a real collision, might be a nestable concavity, e.g. an L-shaped station's notch against a neighbor) and cached until the next intra-station change. Packs tighter but costlier; stations never in a close call this iteration never pay union cost.
 
@@ -146,6 +153,8 @@ Partly redundant with transport-cost minimization (which clusters connected task
 
 ---
 
-## Partial solutions [MVP, provisional]
+## Partial solutions [MVP code present; first scenario picks catalog entries that don't trigger it]
 
-A PARTIAL strategy violates cycle time. Current rule: lexicographic — first maximize fully-solved task count, then minimize cost. **Provisional, expected to change.** Known miss: a partial solution for task A might free a resource enabling a full solution for task B; strict lexicographic can miss this. Accepted for MVP (see `roadmap.md` open questions).
+A PARTIAL strategy violates cycle time. Current rule: lexicographic — first maximize fully-solved task count, then minimize cost. **Provisional, expected to change.** Known miss: a partial solution for task A might free a resource enabling a full resolution for task B; strict lexicographic can miss this. Accepted for MVP (see `roadmap.md` open questions).
+
+> **Status (2026-05-27):** the re-scoped MVP scenario picks an arm catalog entry strong enough that PARTIAL doesn't fire. The mechanism is in the code; if the scenario shifts to one that requires throughput chaining, no architectural work needed — just make sure to evaluate the lexicographic-miss risk on whatever scenario triggers it.

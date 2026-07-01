@@ -1,0 +1,53 @@
+{
+    // Build / configure / test commands that work without CMake Tools installed
+    // (shell-level, not extension commands). If CMake Tools is installed, its
+    // status-bar buttons are usually faster; these tasks exist so the project
+    // works out of the box and as the preLaunchTask for launch.json configs.
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "CMake: configure",
+            "type": "shell",
+            "command": "cmake",
+            "args": ["--preset", "default"],
+            "group": "build",
+            "problemMatcher": [],
+            "presentation": {
+                "clear": true
+            }
+        },
+        {
+            "label": "CMake: build",
+            "type": "shell",
+            "command": "cmake",
+            "args": ["--build", "build/default", "--config", "Debug"],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": ["$msCompile"],
+            "presentation": {
+                "clear": true
+            }
+        },
+        {
+            "label": "CTest: run all",
+            "type": "shell",
+            "command": "ctest",
+            "args": [
+                "--test-dir", "build/default",
+                "--output-on-failure",
+                "-C", "Debug"
+            ],
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
+            "dependsOn": "CMake: build",
+            "problemMatcher": [],
+            "presentation": {
+                "clear": true
+            }
+        }
+    ]
+}

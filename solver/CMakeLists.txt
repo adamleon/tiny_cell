@@ -1,0 +1,31 @@
+find_package(NLopt CONFIG REQUIRED)
+
+add_library(tinycell_solver STATIC
+    src/allocator.cpp
+    src/anchor_strategy.cpp
+    src/arm_strategy.cpp
+    src/belt_routing.cpp
+    src/cost.cpp
+    src/pusher_strategy.cpp
+    src/enumerator.cpp
+    src/layout_objective.cpp
+    src/layout_problem.cpp
+    src/motion_model.cpp
+    src/positional_prior.cpp
+    src/state_propagation.cpp
+    src/station_template.cpp
+    src/transfer_strategy.cpp
+    src/workflow_validation.cpp
+)
+target_include_directories(tinycell_solver PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(tinycell_solver
+    PUBLIC TinyCell::core
+    # NLopt is PRIVATE: nlopt headers are confined to layout_problem.cpp
+    # so consumers of TinyCell::solver don't see NLopt types - keeps the
+    # solve() seam library-agnostic per CLAUDE.md 9.
+    PRIVATE NLopt::nlopt
+)
+target_compile_features(tinycell_solver PUBLIC cxx_std_20)
+add_library(TinyCell::solver ALIAS tinycell_solver)

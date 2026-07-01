@@ -37,7 +37,7 @@ ecs/               ← EnTT integration: components, systems
   components/        validated components (accessors, not public fields)
   systems/
 sync/              ← THE boundary: LayoutSolution (solver structs) <-> EnTT registry
-io/                ← parse YAML -> core/model objects; LayoutSolution -> files
+io/                ← parse JSON -> core/model objects; LayoutSolution -> files
 render/            ← threepp; reads registry; owns Z-up<->Y-up transform
 gui/               ← ImGui; workflow node-graph editor; drives drag/edit
 adapters/          ← the ONLY places foreign libs appear
@@ -185,6 +185,8 @@ Components carrying invariants are **not** plain public-field PODs. A length mus
 - **Validated components use accessor methods, not public fields, and are not accessed via raw EnTT pool iteration** (which would bypass invariants). Reserve raw-data access for genuinely-POD components (tags, flags).
 - **This does not tax the solver:** the solver works on its own lean internal structs; validation happens at the **sync boundary** (boundary frequency), not in the LNS inner loop.
 
+**Staging.** The wrapper layer is introduced at **step 4 / Layer 2** (`roadmap.md`, `decisions.md`), not step 1. Step 1's catalog parses to raw mp-units quantity types and validates range invariants in the JSON loader; the wrapper layer earns its cost once solver code can produce or mutate values, which begins at Layer 2. This is sequencing, not a softening of §8 — the end state described here is unchanged.
+
 ## 9. Optimizer seams (open, low-cost)
 
 Layer 2 (CP-SAT candidate) and Layer 3 (IPOPT candidate) optimizers sit **inside** `solver/` and consume the solver's internal problem representation — they never touch core stored types, so leaving the choice open has no architectural cost. The solver converts frame-resolved geometry into optimizer form (CP-SAT vars / NLP callbacks) at an internal seam.
@@ -196,7 +198,7 @@ Layer 2 (CP-SAT candidate) and Layer 3 (IPOPT candidate) optimizers sit **inside
 ## 10. Data flow (one solve)
 
 ```
-YAML (workflow, blueprint, catalog)
+JSON (workflow, blueprint, catalog)
   → io/ parse → core/model objects (unit-typed, validated)
   → solver/ (internal structs + FrameRegistry + footprint cache; Layers 1→2→3 under LNS — L3 builds/refreshes station footprint caches as part of placement, §5.4)
   → LayoutSolution
@@ -235,7 +237,7 @@ When generating or editing code, obey the rule for the module you are in. This r
 | `solver/` | operate on internal lean structs; flatten at coarsest stable unit + cache (§5.3); footprint cache is solver-internal, not ECS (§3); dirty-flag via single accessor (§5.5); seed re-solve with existing FrameIds (§4.5); optimizer behind neutral seam (§9) | touch the EnTT registry; build validated components; call `express()` per object/pair in a kernel; mutate pose/equipment without dirtying the cache; scaffold against CP-SAT/IPOPT APIs |
 | `ecs/` (components, systems) | validated components via accessors; layer invariants in value types (§8) | expose public mutable fields on invariant-carrying components; bypass invariants via raw pool iteration |
 | `sync/` | own the durable FrameId↔entity map (§4.5); diff on stable identity; order frames→poses→transfers→metrics (§11); validate + assert here (§8) | destroy-and-recreate persistent entities; delete outside delta scope; auto-apply Tier-3 results (§13) |
-| `io/` | parse YAML → `core/model`; validate at parse boundary, reject authored bad data with a message (§8) | invent catalog specs for missing entries (`data-model.md` §3) |
+| `io/` | parse JSON → `core/model`; validate at parse boundary, reject authored bad data with a message (§8) | invent catalog specs for missing entries (`data-model.md` §3) |
 | `render/` | read-only on the registry; all axis/handedness conversion in `threepp_conv.hpp` only (§7) | write to the registry; perform frame math; inline a second copy of the basis-change matrix |
 | `gui/` | drive drag/edit via the sync round-trip; classify re-solve tier *before* running it (`interaction.md`) | mutate solver internals directly; apply a background Tier-3 result without explicit user action |
 | `adapters/` (`glm_conv`, `boost_conv`, `threepp_conv`) | the ONLY place foreign libs are `#include`d; convert at boundaries; strip/reattach units explicitly (§6) | leak a foreign type back into `core/` storage; convert per-element mid-kernel (§5.1) |

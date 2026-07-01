@@ -1,0 +1,70 @@
+{
+  "_notes": [
+    "Post-MVP sales-demo scenario (Phase 1c). A two-line robotic palletizing",
+    "plant, authored as data (loaded by io::load_workflow): a heavy line and a",
+    "light line, each fed boxes + empty pallets, both shipping full pallets to",
+    "one shared dispatch. Recognizable as a palletizing cell for the demo GIF;",
+    "numbers are domain-credible, not certified. Anchor world poses are ballpark",
+    "seeds — the placer sites the two cells between the pinned material anchors.",
+    "Fields prefixed with _ are human notes and ignored by the loader."
+  ],
+  "workflow": [
+    { "id": "feed_heavy", "kind": "anchor", "target_ct_per_item_s": 1.0,
+      "name": "feed_heavy", "role": "output",
+      "world_x_m": -5.0, "world_y_m": 1.6, "world_theta_deg": 0 },
+
+    { "id": "feed_light", "kind": "anchor", "target_ct_per_item_s": 1.0,
+      "name": "feed_light", "role": "output",
+      "world_x_m": -5.0, "world_y_m": -1.6, "world_theta_deg": 0 },
+
+    { "id": "pallets_heavy", "kind": "anchor", "target_ct_per_item_s": 1.0,
+      "name": "pallets_heavy", "role": "output",
+      "world_x_m": -5.0, "world_y_m": 3.4, "world_theta_deg": 0 },
+
+    { "id": "pallets_light", "kind": "anchor", "target_ct_per_item_s": 1.0,
+      "name": "pallets_light", "role": "output",
+      "world_x_m": -5.0, "world_y_m": -3.4, "world_theta_deg": 0 },
+
+    { "id": "dispatch", "kind": "anchor", "target_ct_per_item_s": 1.0,
+      "name": "dispatch", "role": "input",
+      "world_x_m": 5.5, "world_y_m": 0.0, "world_theta_deg": 180 },
+
+    { "id": "heavy_cell", "kind": "palletize", "target_ct_per_item_s": 1.6,
+      "item_id": "box_heavy", "box_count": 24,
+      "item":   { "width_m": 0.4, "length_m": 0.4, "height_m": 0.25, "mass_kg": 25.0,
+                  "symmetry": { "kind": "discrete", "period_deg": 180 } },
+      "pallet": { "width_m": 1.2, "length_m": 0.8, "height_m": 0.15, "mass_kg": 25.0,
+                  "symmetry": { "kind": "discrete", "period_deg": 180 } } },
+
+    { "id": "light_cell", "kind": "palletize", "target_ct_per_item_s": 1.2,
+      "item_id": "box_light", "box_count": 40,
+      "item":   { "width_m": 0.3, "length_m": 0.3, "height_m": 0.2, "mass_kg": 5.0,
+                  "symmetry": { "kind": "discrete", "period_deg": 180 } },
+      "pallet": { "width_m": 1.2, "length_m": 0.8, "height_m": 0.15, "mass_kg": 25.0,
+                  "symmetry": { "kind": "discrete", "period_deg": 180 } } },
+
+    { "id": "t_feed_heavy", "kind": "transport", "target_ct_per_item_s": 1.6,
+      "source_task_id": "feed_heavy",    "source_port_name": "port",
+      "sink_task_id": "heavy_cell",      "sink_port_name": "item_in" },
+
+    { "id": "t_feed_light", "kind": "transport", "target_ct_per_item_s": 1.2,
+      "source_task_id": "feed_light",    "source_port_name": "port",
+      "sink_task_id": "light_cell",      "sink_port_name": "item_in" },
+
+    { "id": "t_pal_heavy", "kind": "transport", "target_ct_per_item_s": 1.6,
+      "source_task_id": "pallets_heavy", "source_port_name": "port",
+      "sink_task_id": "heavy_cell",      "sink_port_name": "pallet_in" },
+
+    { "id": "t_pal_light", "kind": "transport", "target_ct_per_item_s": 1.2,
+      "source_task_id": "pallets_light", "source_port_name": "port",
+      "sink_task_id": "light_cell",      "sink_port_name": "pallet_in" },
+
+    { "id": "t_ship_heavy", "kind": "transport", "target_ct_per_item_s": 1.6,
+      "source_task_id": "heavy_cell",    "source_port_name": "pallet_out",
+      "sink_task_id": "dispatch",        "sink_port_name": "port" },
+
+    { "id": "t_ship_light", "kind": "transport", "target_ct_per_item_s": 1.2,
+      "source_task_id": "light_cell",    "source_port_name": "pallet_out",
+      "sink_task_id": "dispatch",        "sink_port_name": "port" }
+  ]
+}

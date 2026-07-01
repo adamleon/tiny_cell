@@ -44,15 +44,13 @@ The heavier Windows risk is **not** mp-units — it's OR-Tools and IPOPT native 
 
 **threepp is FetchContent — fixed.** It isn't packaged in vcpkg/Conan in a form you'd rely on, and it's a clean CMake-FetchContent consumer. Pin it to a specific commit/tag in `CMakeLists.txt`. This is settled regardless of what the *rest* of the dependencies use.
 
-**Everything else: vcpkg vs. Conan — [OPEN], but leaning vcpkg.** You already know vcpkg; that's a real and valid reason to prefer it, because the dependency manager is infrastructure you'll fight with on bad days, and familiarity lowers that cost. Conan is mp-units' own blessed path (its releases are on Conan-Center) and has historically had stronger coverage of the gnarly native builds — but vcpkg covers this stack well in 2026, including mp-units, EnTT, glm, Boost, and ImGui, and its manifest mode is simpler.
+**Everything else: vcpkg — RESOLVED.** The Phase A spike at the start of step 5 (`spike/layer3-optimizer/FINDINGS.md`, decision recorded in `decisions.md` "Layer-3 NLP backend") validated NLopt on Windows via vcpkg — installs cleanly, ships a CMake config, single runtime DLL. Boost.Geometry similarly installs cleanly via vcpkg. The OR-Tools/IPOPT-on-Windows risk that originally motivated leaning-but-deferring is moot: IPOPT was rejected (vcpkg's `coin-or-ipopt` port has no usable linear solver out-of-the-box on Windows — HSL not redistributable, MUMPS not built in, Pardiso licensed); OR-Tools isn't needed yet either (Layer 2 is hand-rolled per `decisions.md`).
 
-The decision really hinges on **one question: which manager builds OR-Tools and IPOPT on Windows with least pain?** That's the genuine risk in this stack (§2.2), not the header-only libraries. Both managers carry these, but verify a clean Windows build of both heavy solvers in your chosen manager *before* committing — a proof-of-concept build is worth more than either of our priors here.
+Net stack: **vcpkg manifest mode (`vcpkg.json` at the repo root)** for packaged libraries (nlopt, boost-geometry); **FetchContent for source-pinned libraries** (gsl-lite, mp-units, nlohmann_json, googletest, eventually threepp). Versions pinned via vcpkg `builtin-baseline` + per-port `version>=` AND FetchContent `GIT_TAG`. The vcpkg checkout is provided by the user via `VCPKG_ROOT` env var; `CMakePresets.json` references it as `$env{VCPKG_ROOT}`.
 
-Recommendation: **start with vcpkg** (manifest mode, `vcpkg.json`), since you know it and it covers the MVP dependencies (mp-units + Boost.Geometry + glm; EnTT/ImGui come later). Defer the OR-Tools/IPOPT-on-Windows proof-of-concept until you reach Layer 3 (`roadmap.md` step 5) — but do it *as* a proof-of-concept spike, not inline, so a nasty native-build surprise doesn't block solver logic you've already written. If vcpkg can't build them cleanly on Windows and Conan can, switching is cheaper at that point than after the lockfile is entrenched.
+**Conan reserved as a fallback if vcpkg ever fails on a needed dependency.** Not needed at MVP; revisit if a future Layer-3 algorithm swap (e.g. real IPOPT-with-MUMPS) requires a port vcpkg can't carry.
 
-Mixed approach is fine and probably what you'll land on: **vcpkg for the packaged libraries, FetchContent for threepp.** Don't add Conan as a third tool unless the OR-Tools/IPOPT spike forces it.
-
-Whatever is chosen: **pin exact versions in a manifest/lockfile and commit it.** This stack is version-sensitive — mp-units had a breaking V2 engine change and a V3 is on the horizon; an unpinned mp-units upgrade could break `core/` silently. Pin it.
+**Pin exact versions in the manifest/lockfile and commit them.** This stack is version-sensitive — mp-units had a breaking V2 engine change and a V3 is on the horizon; an unpinned mp-units upgrade could break `core/` silently.
 
 ### 2.4 Text formatting backend
 
@@ -76,7 +74,7 @@ The design docs are emphatic and consistent: **never silently clamp a bad value*
 
 | Situation | Origin | Recoverable? | Mechanism | Why |
 |---|---|---|---|---|
-| **Authored bad data** | user YAML / catalog (`io/`) | Yes — report and reject | **Reject at parse boundary with a diagnostic** (error value or typed parse exception carrying a message) | The user can fix their input; they need a message saying what and where, not a crash. Caught at the `io/` boundary (`CLAUDE.md` §0, §8). |
+| **Authored bad data** | user JSON / catalog (`io/`) | Yes — report and reject | **Reject at parse boundary with a diagnostic** (error value or typed parse exception carrying a message) | The user can fix their input; they need a message saying what and where, not a crash. Caught at the `io/` boundary (`CLAUDE.md` §0, §8). |
 | **Solver-produced invariant violation** | a bug in our code (`solver/` emits a value that fails a validated-component invariant at the `sync/` boundary) | No — it's a defect | **Assert / throw** | This can never happen if the solver is correct; if it happens, the solver is wrong and must fail loudly, not limp on. (`CLAUDE.md` §1, §8; `decisions.md` validated-components entry.) |
 | **Missing catalog spec / standards number** | absent input entry | Yes — report | **Reject as an input error; never fabricate** | A missing entry is an input error, not a default to invent (`CLAUDE.md` §1, `data-model.md` §3, `standards.md`). Same path as authored-bad-data. |
 
@@ -136,17 +134,15 @@ Every commit: build under the supported compiler set (§2.2), run clang-format/c
 - **Language standard:** C++20, fixed. No modules, no `import std;` (§1).
 - **Build system:** CMake 3.28+ (§2.1).
 - **Compilers:** MSVC 194+ / GCC 13+ / Clang 17+ (avoiding Clang 19 and Apple-Clang 17.0); Windows in CI from day one; GCC/Clang as the conformance reference (§2.2).
+- **Dependency manager:** vcpkg manifest mode for packaged libraries (nlopt, boost-geometry); FetchContent for source-pinned libraries (gsl-lite, mp-units, nlohmann_json, googletest, threepp). Settled by the Phase A spike at start of step 5 (§2.3, `decisions.md` "Layer-3 NLP backend").
+- **Layer-3 NLP backend:** NLopt — algorithm choice is local to `solver/src/layout_problem.cpp` behind the `solve()` seam (currently `LN_BOBYQA`; `decisions.md` "Layer-3 algorithm").
 - **threepp:** FetchContent, pinned to a tag (§2.3).
 - **Test framework:** GoogleTest (§4.1).
 - **Recoverable-error mechanism:** typed `ParseError` exception at the `io/` boundary; invariant violations assert/throw at the `sync/` boundary (§3).
 - **mp-units contract checking:** ON in both debug and release, pinned explicitly in the build config (§3.2).
 - **Text formatting backend:** `std::format`, with fmtlib as a one-flag MSVC fallback (§2.4).
 
-**Remaining [OPEN] — do not lock in code:**
-
-- **Dependency manager for packaged libs** (§2.3): vcpkg vs. Conan. Leaning vcpkg (you know it, covers the MVP deps). The real tiebreaker is OR-Tools/IPOPT-on-Windows build pain — run a proof-of-concept spike at Layer 3, not before. threepp is FetchContent either way.
-
-This is now the *only* open infrastructure decision, and it doesn't block MVP `core/` work — the light MVP deps (mp-units, Boost.Geometry, glm) build cleanly under either manager. Settle it when the Layer-3 solver libraries arrive.
+**No remaining [OPEN] infrastructure decisions at MVP.** Layer-3 library + algorithm choices are local to one file behind the `solve()` seam and can be revisited without disturbing the rest.
 
 ---
 

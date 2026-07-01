@@ -28,6 +28,8 @@ Strategy.applies_to(task) -> bool
 
 A strategy may apply to multiple task *kinds* (e.g. a pusher applies to both "push off belt" and "palletize"). Do **not** wire strategies to task names — capability matching is what enables strategy-class reuse.
 
+Concretely: name strategies after the *equipment type only*, not `(equipment × task)`. Use `ArmStrategy` (one class covering `Palletize`, `Transport`, `Assemble`), not `ArmPalletizeStrategy` + `ArmTransportStrategy` + `ArmAssembleStrategy`. Shape tasks equipment-agnostically (`Palletize(item, pallet, count)`, not `PalletizeWithArm`) so the OR-node fan-out has multiple strategies to choose between. See `decisions.md`.
+
 ```
 Strategy.evaluate(task, context) -> StrategyResult {
   feasibility:    FULL | PARTIAL | INFEASIBLE,
@@ -35,18 +37,39 @@ Strategy.evaluate(task, context) -> StrategyResult {
   shareable:      bool,                        // can this instance serve other tasks?
   energy_per_cycle: joules,                    // primary objective (units: §6)
   cycle_time:     seconds,                      // this task's contribution
-  poses:          { pickup?, dropoff?, anchor?, segment? },
-  requires_state: predicate(ItemState),        // STATE precondition (§4)
-  effect:         ItemState -> ItemState,      // how this equipment mutates item state (§4)
+  port_constraints:   [PortConstraint],            // one record per (port_name × constraint source); multiple stack
+  requires_state:     predicate(ItemState),         // STATE precondition (§4)
+  effect:             ItemState -> ItemState,       // how this equipment mutates planner state (§4)
   preconditions:  [Task],                       // STRUCTURAL preconditions — AND children
   partial_info:   { achievable_ct, target_ct } | null,
 }
 ```
 
+`port_constraints` carries the strategy's contribution to the placer's per-port hard regions + soft preferences (see §2.2 below). Replaces the earlier `poses: { pickup?, dropoff?, anchor?, segment? }` sketch — `Task.task_ports()` declares the logical ports a task exposes; each strategy that binds to the task contributes regions for those ports.
+
 - **Capex is NOT on the strategy.** It lives on the catalog entry, resolved at binding time (same strategy + same model = same price regardless of task). See `decisions.md`.
 - **Energy IS on the strategy** — it depends on the motion the task requires.
 
-### 2.1 Guards vs. preconditions
+### 2.1 Logical ports and PortConstraint
+
+A task declares **logical ports** (named I/O channels for items flowing in or out) via `Task::task_ports()` — the kind alone determines the set. For a Palletize task: `item_in`, `pallet_in`, `pallet_out`. Logical ports are geometry-free; they say "this task has an item-input channel," not where it sits.
+
+Strategies emit **PortConstraint** records that ground the logical ports in geometry. **Current shape** (as implemented in `core/include/tinycell/model/port.hpp` through step 5):
+
+```
+PortConstraint {
+  port_name:            string,                 // matches a logical port
+  x, y:                 Length,                 // station-frame point
+  theta:                Angle,                  // port flow direction in station frame
+  direction_tolerance:  Angle,                  // 0 = strict; pi/2 = any-direction-within-reach
+}
+```
+
+`x, y` is a single point — there's no notion of "the port can land anywhere within a region." All strategy emissions today put the port at `(0,0)` for arms (station origin = arm base) or at the pusher's stroke offset for pushers.
+
+**Step-6 M1 plan** (working notes in `roadmap.md`; not yet implemented) reshapes this to carry a region instead of a single point so the inter-station placer can vary port positions within the equipment's reachable area. Schema details and design alternatives live in `roadmap.md` step 6 M1 — they'll graduate into this section (and `decisions.md`) once M1 code commits to them.
+
+### 2.2 Guards vs. preconditions
 
 | | Guard | Precondition (Task) |
 |---|---|---|
@@ -80,9 +103,11 @@ CatalogEntry {
 - **Point/footprint** (arm, gripper, camera, pusher, fixture): anchors to a pose; footprint & cost fixed at binding.
 - **Segment** (conveyor): connects from-pose → to-pose; length/footprint/capex/energy are **layout-dependent**, re-evaluated each optimizer iteration.
 
+**Belt/conveyor catalog** is planned for step 6 M2 — working notes (fields, allocator-output shape, whether belts host attached equipment) live in `roadmap.md` step 6 M2, not as a decision here. Today's `TransferStrategy` is "magical" (no equipment, no geometry); replacing it with a real `BeltStrategy` against a `BeltSpec` catalog is what M2 is.
+
 ### 3.1 Station footprint cache
 
-A station's footprint is the **accumulated** footprint of its equipment (equipment poses are relative to the station frame). Hull and union are **one unified object** (shared invalidation — they describe the same footprint at two fidelities, so they must never drift apart), but the **union is built lazily**: most collision checks are resolved by the hull broad-phase and never need it (see `solver-v2.md` "Geometry flattening & caching", broad/narrow phase).
+A station's footprint is the **accumulated** footprint of its equipment (equipment poses are relative to the station frame). Hull and union are **one unified object** (shared invalidation — they describe the same footprint at two fidelities, so they must never drift apart), but the **union is built lazily**: most collision checks are resolved by the hull broad-phase and never need it (see `solver.md` "Geometry flattening & caching", broad/narrow phase).
 
 ```
 StationFootprint {
@@ -104,39 +129,138 @@ StationFootprint {
 - Clearance buffer baked in at `*_local` build time (not per collision check).
 - **[deferred / see architecture]** `world_hull`/`world_union` may be unified with a general frame-world-pose cache rather than maintained as a second independent world cache — resolve before implementing to avoid two parallel caches that must stay in sync.
 
-## 4. Item State [MVP]
+## 4. Items and state [MVP]
 
-A small, fixed vector propagated forward through the workflow DAG, mutated by each chosen strategy's `effect`. Checked against each strategy's `requires_state` at the node where that strategy sits.
+**Principle: properties, not types.** Strategies reason about item *properties* (symmetry, dimensions, future surface / rigidity / chirality) via shared helpers — never via item-type switches. Adding a new shape becomes "a different set of property values," not "a new code path." The helper layer (`distinct_alignments`, `orientation_known`, `orientation_pinned`, `control_matches_alignment`, future `graspable_by` / `stable_on` / …) is the seam against the nested if-trees that an item-type switch invites. See `decisions.md` "Item properties drive strategy gating, not item type."
+
+Four conceptually distinct things, often conflated:
+
+| | Owned by | Mutates? |
+|---|---|---|
+| **ItemPhysical** — static physical-spec fields (dimensions, mass, symmetry; future surface/rigidity/chirality) | `core/model/<item>.hpp` (BoxSpec, PalletSpec, …) | Never |
+| **ItemState** — planner-tracked facts about ONE item in the workflow (pose precision/control, carrier placement) | Threaded through workflow | Each task |
+| **Sensor capability** — what a strategy can OBSERVE about an item (camera updates Knowledge axis; laser updates one position axis) | The sensor strategy class | Static per strategy |
+| **Actor requirement + effect** — what an actor needs to operate and how it changes state (arm reads Knowledge; pusher reads Control; both update both axes on placement) | The actor strategy class | Static per strategy |
+
+### 4.1 ItemPhysical and the spec types [MVP]
+
+Every item type (Box, Pallet, future Tote / Bottle / …) carries the same shape of physical properties:
+
+```
+ItemPhysical {
+  width, length, height: Length,
+  mass:                  Mass,
+  symmetry:              RotationalSymmetry,
+}
+
+BoxSpec    { physical: ItemPhysical }
+PalletSpec { physical: ItemPhysical }
+```
+
+`BoxSpec` and `PalletSpec` remain distinct types (composition, not inheritance / not aliases) so a task like `PalletizeParams{ BoxSpec item; PalletSpec pallet; }` can't accidentally swap the roles. New shared physical fields land on `ItemPhysical` once; new item-type-specific fields land on the wrapper.
+
+**Future:** when the workflow shifts from threading specs to threading individual instances, instances will be `{ const <Spec>* spec; ItemState state; }` wrappers. Today's shapes are designed so this becomes a mechanical wrap.
+
+### 4.2 RotationalSymmetry [MVP]
+
+Static property on `ItemPhysical`. Three states, variant-of-tagged-types so invariants hold by construction:
+
+```
+RotationalSymmetry =
+  | Continuous                      // cylinder; any rotation maps to self
+  | Discrete { period_deg: int }    // smallest self-mapping rotation
+  | Asymmetric                      // only the identity (360°) maps to self
+```
+
+`period_deg ∈ (0, 360)`, rotation only (reflections not modelled; chirality is moot for boxes/pallets, and mixing reflection in muddies the alignment-counting):
+
+| Item | Symmetry | Alignments at 90° cardinal grid |
+|---|---|---|
+| Cylinder | `Continuous` | 1 (trivially) |
+| Hexagon | `Discrete(60)` | 2 ({0°,180°} / {90°,270°}) |
+| Square / 4-fold | `Discrete(90)` | 1 (all cardinals equivalent) |
+| Equilateral triangle | `Discrete(120)` | 4 (no cardinal pairs share an orbit) |
+| Rectangle / 2-fold | `Discrete(180)` | 2 ({0°,180°} long-along-X / {90°,270°} long-along-Y) |
+| Asymmetric block | `Asymmetric` | 4 (all cardinals distinct) |
+
+An **alignment** is one of the symmetry-equivalence classes of orientations at the snap grid the cell uses. For Phase 1 we assume the 90° cardinal grid; the snap step is a parameter to `distinct_alignments` for future fixtures that use a different geometry.
+
+### 4.3 ItemState — the dynamic planner state [MVP]
 
 ```
 ItemState {
-  position_known:          bool,
-  orientation_resolved_to: CONTINUOUS | DISCRETE(n) | EXACT | UNKNOWN,
-  on_carrier:              PALLET | BELT | FREE | FIXTURE,
+  position_known: bool,
+  orientation: {
+    knowledge: OrientationKnowledge,
+    control:   OrientationControl,
+  },
+  on_carrier: OnCarrier { Pallet | Belt | Free | Fixture },
 }
+
+OrientationKnowledge =
+  | Unknown                          // no observation
+  | Known { alignment: int }         // observed (e.g., camera) to be in this alignment
+
+OrientationControl =
+  | Free                             // no physical constraint
+  | Constrained { alignment: int }   // physically pinned (e.g., fixture, side-guides)
 ```
 
-**Propagation:** start from user-declared initial state at input; apply each strategy's `effect` in flow order; check `requires_state` against state at that node. A violated state precondition spawns a recovery task **at that point** (not earlier — where the state was already satisfied, recovery equipment would be wasted).
+**Knowledge vs Control — two independent axes.** A camera reads alignment passively without changing the physical state — it writes `knowledge`, not `control`. A fixture physically pins the item to a specific alignment — it writes `control` (and by inference may also collapse `knowledge`). They can diverge: a rectangle observed by a camera (Knowledge = Known(0)) can still rotate on the belt before the next station consumes it (Control = Free). The next station's failure mode dictates which axis it reads:
 
-Some equipment exists purely to mutate state (a fixture forcing orientation, a camera establishing pose). Valid strategy whose `effect` is the whole point.
+- **Arm-style strategies** plan their motion from the planner's belief and have end-effector compliance to absorb minor drift — they read `knowledge`.
+- **Pusher-style strategies** have open-loop strokes (no compensation once contact starts) — they require the item to be physically held in the right alignment, reading `control`.
 
-**[deferred]** This is a fixed small vector, not a general predicate/effect planner. Generalize only if a real case demands it.
+This is the load-bearing distinction. Camera + arm: fine, the arm uses the belief. Camera + pusher: NOT fine — the item could rotate between observation and contact. Camera + fixture + pusher: fine, the fixture provides the physical hold.
 
-### 4.1 Orientation as symmetry-aware precision [MVP]
+### 4.4 The property → strategy helper layer [MVP]
+
+Strategy predicates compose these helpers rather than switching on item-type or on `RotationalSymmetry::Kind`:
 
 ```
-ItemSymmetry {
-  z_rotation: CONTINUOUS | DISCRETE(n) | NONE,
-  flippable:  bool,
-}
+distinct_alignments(symmetry, snap_step_deg = 90) -> int
+  Continuous symmetry      -> 1
+  Discrete(period) at K°   -> count of cardinal-orbit equivalence classes
+  Asymmetric at K°         -> 360 / K (no symmetry collapse)
+
+orientation_known(symmetry, knowledge) -> bool
+  Continuous symmetry      -> true (trivially)
+  knowledge is Known       -> true
+  knowledge is Unknown     -> false
+
+orientation_pinned(symmetry, control) -> bool
+  Continuous symmetry      -> true (no class distinction)
+  control is Constrained   -> true
+  control is Free          -> false
+
+knowledge_matches_alignment(symmetry, knowledge, required) -> bool
+  Continuous symmetry              -> true
+  knowledge is Known{required}     -> true
+  otherwise                        -> false
+
+control_matches_alignment(symmetry, control, required) -> bool
+  Continuous symmetry                 -> true
+  control is Constrained{required}    -> true
+  otherwise                           -> false
 ```
 
-**Satisfaction rule:** an orientation requirement is met when *what the task needs resolved* ⊇ *what symmetry collapses*. Reduce required precision by symmetry before checking against available precision.
-- Bottle (CONTINUOUS) + any pick → orientation requirement vanishes; no orientation sensing.
-- Square box (DISCRETE 4) + grid palletize → need pose only mod 90°; coarse sensor suffices.
-- Asymmetric (NONE) + oriented placement → full pose; pay for vision or forcing fixture.
+This is the seam. New strategy classes call these helpers; new symmetries (or future K/C states like partial-narrowing `Hypotheses{set}` or multi-alignment `Constrained{set}`) update the helpers in one place; no strategy code switches on item type.
 
-**[MVP scope]** z-rotation symmetry + flippable only. Full SO(3) symmetry **[deferred]**.
+**Phase 2 helpers (when needed):**
+- `camera_reads(ItemPhysical) -> OrientationKnowledge` — when a CameraStrategy lands.
+- `fixture_forces(FixtureSpec, RotationalSymmetry) -> OrientationControl` — when a FixtureStrategy lands.
+- `graspable_by(ItemPhysical, GripperSpec) -> bool` — when grippers diversify.
+- `stable_on(ItemPhysical, ItemPhysical) -> bool` — when palletize patterns get geometry-aware.
+
+See `roadmap.md` for the staging.
+
+### 4.5 State propagation [MVP]
+
+Start from a user-declared initial `ItemState`. For each task in workflow order: check the chosen strategy's `requires_state` against the running state; if it passes, apply the strategy's `effect` to produce the next task's inbound state. A violation FAILs the pass at that task — no recovery-task spawning at MVP (recovery belongs with the AND-OR walker, which doesn't exist yet).
+
+The propagator (`solver/state_propagation.{hpp,cpp}`) plays the **batch validator** role for finished candidates; the *primitive* a live solver consumes is `requires_state` + `effect` on each `StrategyResult`, threaded inline through whichever search loop is running. See `decisions.md` "State-flow primitive … is load-bearing; the batch walker … is a validator-only role."
+
+**[deferred]** Full predicate/effect planner; recovery-task spawning; probabilistic / confidence-weighted knowledge; multi-alignment `Hypotheses` / `Constrained-set` variants (for partial-narrowing sensors and generous fixtures); per-DOF position knowledge/control (currently `position_known: bool`); explicit frame composition for orientation across frames.
 
 ## 5. Output format [MVP]
 

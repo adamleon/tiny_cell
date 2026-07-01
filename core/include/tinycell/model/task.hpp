@@ -1,0 +1,125 @@
+#pragma once
+
+// Task domain types — the OR-nodes of the AND-OR graph the solver builds
+// (data-model.md §1). A Task names a *goal*, never the equipment used to
+// solve it (decisions.md — strategy-class reuse). Today only the Palletize
+// kind exists; new kinds are added by appending an alternative to TaskParams
+// and a case to Task::kind().
+
+#include <stdexcept>
+#include <string>
+#include <tinycell/model/box.hpp>
+#include <tinycell/model/pallet.hpp>
+#include <tinycell/model/validated.hpp>
+#include <tinycell/units.hpp>
+#include <variant>
+
+// PortDirection lives in model/port.hpp, but AnchorParams below needs
+// it. Forward-declare here to avoid a circular include
+// (port.hpp includes task.hpp for task_ports()).
+namespace tinycell::core { enum class PortDirection; }
+
+namespace tinycell::core {
+
+// PalletizeParams — "place box_count boxes of `item` onto a `pallet`". The
+// stacking pattern (grid only at step 1) is derived from box + pallet
+// dimensions; it isn't a parameter so different equipment can choose
+// different patterns from the same task.
+struct PalletizeParams {
+    std::string item_id;
+    BoxSpec item;
+    PalletSpec pallet;
+    int box_count;
+};
+
+// TransportParams — "move items from source_task's output port to
+// sink_task's input port". The Transport task is the node that owns
+// the move; its strategy (TransferStrategy at MVP, BeltStrategy later)
+// realizes the physical path between the referenced ports.
+//
+// The Transport task itself exposes no logical ports of its own
+// (task_ports(Transport) returns empty in model/port.hpp): a Transport
+// is the EDGE between two other tasks' ports, not a node with its own
+// I/O channels. Referenced ports must exist on the named tasks and
+// have matching direction polarity (source_port_name must name an
+// output, sink_port_name must name an input). Validation is the
+// workflow author's responsibility at MVP; an io/-layer check can
+// land if authored bad data becomes a real risk.
+struct TransportParams {
+    std::string source_task_id;
+    std::string source_port_name;
+    std::string sink_task_id;
+    std::string sink_port_name;
+};
+
+// AnchorParams — a workflow node pinned to a specific world pose,
+// representing material that enters or leaves the cell at a fixed
+// location (a feeder belt's start, a dispatch zone). Used as the
+// source or sink endpoint of a Transport task when the actual
+// upstream / downstream is outside the cell.
+//
+// `role` says whether items flow OUT of the anchor (Output — a
+// feeder) or IN to it (Input — a dispatch). task_ports(Anchor)
+// returns one port named "port" with this direction.
+//
+// The world pose is pinned at workflow-definition time and the
+// placer does NOT optimise over it — Layer-3 treats Anchor stations
+// as constants. world_theta is the direction items flow at the
+// anchor (the anchor's "port flow direction" in world coords).
+struct AnchorParams {
+    std::string name;
+    PortDirection role;
+    Length world_x;
+    Length world_y;
+    Angle world_theta;
+};
+
+using TaskParams = std::variant<PalletizeParams, TransportParams, AnchorParams>;
+
+// Discriminator mirroring TaskParams' alternatives. Add a value here AND a
+// case to Task::kind() in lockstep when a new task kind is introduced.
+enum class TaskKind { Palletize, Transport, Anchor };
+
+// Task — one goal the solver must produce a strategy for. `params` carries
+// the kind-specific data; `kind()` reports the discriminator (useful for
+// switch statements in strategies that handle multiple kinds).
+//
+// `target_ct_per_item` is the per-item cycle-time target a strategy must
+// meet to return FULL feasibility (a strategy slower than this returns
+// PARTIAL, with the residual throughput emitted as a child task — see
+// decisions.md "Per-task throughput target"). It is a workflow-phase
+// input: the customer specifies a whole-cell rate (e.g. "100 pallets/h"),
+// the workflow translator converts that to per-task per-item seconds
+// (e.g. 24 boxes × 100 pallets/h = 2400 boxes/h → 1.5 s/box) and writes
+// it here. The solver itself never allocates cycle time across stations;
+// it only consumes this target and explores the OR-tree to meet it.
+//
+// `is_residual` flags a task that was emitted by another strategy's
+// PARTIAL result (preconditions). Some strategies refuse residuals —
+// PusherStrategy in particular, because a pusher owns its station and
+// cannot supplement another strategy (decisions.md "Pusher strategies
+// emit only FULL or INFEASIBLE; refuse residual tasks"). Default false
+// for top-level workflow-defined tasks.
+struct Task {
+    std::string id;
+    TaskParams params;
+    CycleTimePerItem target_ct_per_item;
+    bool is_residual = false;
+
+    TaskKind kind() const {
+        if (std::holds_alternative<PalletizeParams>(params)) {
+            return TaskKind::Palletize;
+        }
+        if (std::holds_alternative<TransportParams>(params)) {
+            return TaskKind::Transport;
+        }
+        if (std::holds_alternative<AnchorParams>(params)) {
+            return TaskKind::Anchor;
+        }
+        // Reachable only if TaskParams gets a new alternative without a
+        // matching case here — guard against the mistake.
+        throw std::logic_error("tinycell::core::Task::kind(): unknown variant alternative");
+    }
+};
+
+} // namespace tinycell::core

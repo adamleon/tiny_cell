@@ -1,0 +1,12 @@
+# vcpkg clone (external tool, not our code)
+vcpkg/
+
+# vcpkg manifest-mode installed tree (regenerated from vcpkg.json)
+vcpkg_installed/
+
+# CMake build outputs
+build/
+out/
+
+# Tee-Object logs from configure/build runs
+*.log

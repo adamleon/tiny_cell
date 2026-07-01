@@ -2,6 +2,8 @@
 build/
 build-msvc/
 build-mingw/
+build-vk/
+build-p1/
 
 # CMake user-specific files
 CMakeUserPresets.json

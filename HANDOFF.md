@@ -10,6 +10,79 @@ a description, not a backlog).
 
 ---
 
+## ⏳ RESUME HERE — Phase 2 chunk 2: the render scene (updated 2026-07-01)
+
+**Branch / state:** on `feature/demo-render` (pushed to origin), 4 commits on top
+of `dev` — docs(open leg) → Phase 0 render spike → Phase 1 workflow tooling →
+`b19b694` pipeline extraction. Working tree clean. `dev`/`main` untouched. Full
+suite **22/22 ctest green**.
+
+**Done:** Phase 0 ✅ (Vulkan spike renders on the RTX 3090). Phase 1 ✅ (JSON
+workflow loader + workflow SVG + `assets/workflow/two_line_palletizer.json`).
+**Phase 2 chunk 1 ✅** — `build_layout_problem` + `LayoutBuildResult`/`StationSource`
+extracted into the new **`pipeline/`** lib (a layer above `solver/`; uses the boost
+adapter). The SVG demo consumes it, behaviour unchanged.
+
+**DO NEXT — Phase 2 chunk 2 (first real 3D render of a solved cell):** build the
+`render/` module proper + a render app that runs the pipeline on the two-line
+scenario and draws it fullscreen Vulkan → PNG. Steps:
+1. **`render/src/threepp_conv.hpp`** — the ONE axis conversion: a root `Group`
+   with `rotation.x = -π/2` maps core **Z-up → threepp Y-up** (robots are Z-up
+   too → they drop under the same root, no per-object rotation). Add the §7
+   round-trip identity test (core `Pose2D` → threepp → core ≈ identity).
+2. **Scene builder** — given `pipeline::LayoutBuildResult` + `solver::LayoutSolution`
+   + `route_belts()` output, build a threepp scene under the root group: floor
+   plane; per Instance station a reach ring (arm `reach.min/max_radius`), the
+   buffered-hull footprint, pallet-zone boxes, and the KUKA arm; per Anchor a
+   marker; belts as thin boxes. World-resolve station-frame geometry with
+   `tc::apply(tc::Transform2D{pose.x,pose.y,pose.theta}, poly)` (see the demo's
+   `draw_layout_svg` for the exact per-station drawing recipe — mirror it in 3D).
+3. **KUKA arms** — `threepp::URDFLoader().load(urdfPath) -> shared_ptr<Robot>`;
+   `scene->add(robot)`; place at the cell's solved pose (`solution.station_poses[i]`,
+   yaw = `pose.theta`). URDFLoader resolves the relative `../meshes/` paths itself;
+   DAE/STL/OBJ/glTF all load in the Vulkan build.
+4. **Render app** target under `render/` (gated by `TINYCELL_WITH_VULKAN`), links
+   `TinyCell::{pipeline,solver,io,core}` + threepp. Pipeline sequence (same as
+   `demos/solve_workflow/main.cpp` but load the scenario from JSON + use the
+   extracted builder): load catalogs (arm/pusher/belt) →
+   `io::load_workflow("assets/workflow/two_line_palletizer.json")` →
+   `ts::validate_workflow` → `ts::enumerate` → `ts::allocate` →
+   `pipeline::build_layout_problem` → `ts::solve` → `ts::route_belts`; then
+   scene-build → `VulkanRenderer::render` → `writeFramebuffer("cell.png")`.
+
+**Robot visuals (both DAE-coloured, both reach a full EUR pallet):**
+map each solved instance's `catalog_id` → a physics-worktree URDF for the VISUAL:
+- heavy cell → **Quantec KR150 R3100/2**:
+  `D:\development\tiny_cell-physics\assets\robots\kuka_quantec\urdf\kr150_r3100_2.urdf`
+- light cell → **IONTEC KR30 R2100**:
+  `D:\development\tiny_cell-physics\assets\robots\kuka_iontec\urdf\kr30_r2100.urdf`
+
+**⚠ OPEN ITEMS — verify first, don't assume:**
+- **Does `two_line_palletizer.json` actually SOLVE?** It's only `validate_workflow`-
+  checked (topology). Confirm `enumerate→allocate→build_layout_problem→solve`
+  succeeds AND `layout.cell_diagnostics` is empty (intra-station feasibility) with
+  the current `assets/arm/kuka/catalog.json`. If the catalog lacks arms matching
+  25 kg / 5 kg payload + full-pallet reach, add catalog entries or tune the
+  scenario's pallet/payload. (The solve_workflow demo's own dual-pallet 50 kg →
+  KR120 PA scenario already solves — crib its arm-catalog usage.)
+- **catalog_id → URDF map:** a small render-side lookup (or hardcode per-cell for
+  the demo); decide once you see which arms allocate. The solver's `catalog_id`
+  comes from `assets/arm/kuka/catalog.json`, NOT the physics URDFs (those are the
+  visual meshes only).
+
+**threepp API cheat-sheet** (verified against `D:\development\threepp`):
+`Scene scene;` `VulkanRenderer renderer(canvas);` `renderer.render(scene,camera);`
+`renderer.writeFramebuffer(path)` → PNG. `BoxGeometry::create(w,h,d)`,
+`PlaneGeometry::create(w,h)`; `MeshStandardMaterial::create(MeshStandardMaterial::
+Params{}.color(0xRRGGBB).roughness(r).metalness(m))`; `Mesh::create(geom,mat)`;
+`Object3D`: `position.set(x,y,z)`, `rotation.z=`, `quaternion`, `add(child)`.
+Examples: `examples/loaders/urdf_loader_simple.cpp`, `examples/vulkan/vulkan_lights.cpp`.
+(The full Phase-2 map — assets inventory, threepp API, solver→scene translation —
+was produced by a workflow into a gitignored temp file; its key facts are here +
+in the `project-postmvp-demo` memory.)
+
+---
+
 ## The goal
 
 A **video/GIF sales demo** to pitch a prospective industrial partner who uses
@@ -81,10 +154,13 @@ pulled in only when a phase concretely needs it, never speculatively.
   tests pass. KNOWN NIT: the fixed 3-column layout lets pallet-supply→cell
   diagonals cross feed edges and overlaps a couple of edge labels — readable,
   refine to a layered layout only if a scenario needs it.
-- [ ] **Phase 2 — solver → 3D scene, static.** `render/` reads a `LayoutSolution`
-  and builds a threepp scene (floor, equipment, belts, pallets, KUKA arm via
-  `URDFLoader`). Axis/handedness in ONE `render/threepp_conv.hpp` constant
-  (+ round-trip identity test, §7).
+- [~] **Phase 2 — solver → 3D scene.** **Chunk 1 ✅ DONE + committed (`b19b694`):**
+  extracted `build_layout_problem` → the new `pipeline/` lib (shared by the SVG
+  demo + render app; 22/22 green). **Chunk 2 = NEXT — see ⏳ RESUME HERE up top:**
+  `render/threepp_conv.hpp` (Z-up→Y-up root rotation + round-trip test) + a scene
+  builder (floor, footprints, reach rings, pallet zones, belts, KUKA arms via
+  `URDFLoader`) + a render app running the pipeline on the two-line scenario →
+  fullscreen Vulkan → PNG.
 - [ ] **Phase 3 — art direction (Tiny Glade look).** Materials, warm lighting,
   soft shadows, tone mapping, palette, framing. The Vulkan PT gives real GI/AO/
   soft shadows live.
@@ -111,7 +187,11 @@ solver can cheaply re-rank one equipment at a candidate pose without a full solv
 
 **Core build unchanged** (Vulkan is OFF by default): from a VS dev shell with
 `VCPKG_ROOT` set, `cmake --preset default` → `cmake --build build/default
---config Debug` → `ctest --test-dir build/default`. 19/19 green.
+--config Debug` → `ctest --test-dir build/default`. **22/22 green** (19 original +
+3 Phase-1 tests). NOTE: a clean reconfigure of `build/default` currently hits the
+vcpkg baseline-blob issue (below); Phase-1's non-Vulkan tests were verified in a
+`build-p1` tree using the `-DVCPKG_MANIFEST_MODE=OFF -DVCPKG_INSTALLED_DIR=…` reuse
+workaround. `build-vk` (Vulkan) and `build-p1` (CPU+tests) are both gitignored.
 
 **Vulkan render module** (opt-in, separate `build-vk` tree so the core build is
 untouched). Needs the Vulkan SDK. threepp is pulled by FetchContent; point it at
